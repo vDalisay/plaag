@@ -23,3 +23,9 @@ mono_crash.*.json
 *.exe
 # Uncomment if your project does not version PCK files as runtime dependencies.
 # *.pck
+
+# Local builds and isolated test runs (tests/run_tests.ps1 writes below builds/test-runs).
+/builds/
+
+# Local Claude Code state: worktrees and scratch files.
+/.claude/
