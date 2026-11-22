@@ -2,6 +2,7 @@
 ## A Bite adds a chunk and raises the rate; once infected the meter keeps
 ## climbing on its own at base_rate + bonus_rate - cleanse_rate per second,
 ## and the host dies when it reaches 100.
+## Every Bite emits `bitten(chunk)` (floating Bite numbers, the Round's Bite count).
 ## Exterminators (M6) also set `bonus_decay`: their Bite rate bonus fades
 ## (exponentially, per second), so only Bites kept up together can beat them.
 class_name InfectionComponent
@@ -10,6 +11,8 @@ extends Node
 signal infected            # first time value goes above 0
 signal died                # value reached 100
 signal value_changed(value: float)
+## A Bite landed (UX pass): the Infection it added at once (after gain_multiplier).
+signal bitten(chunk: float)
 
 @export var base_rate := 5.0         # %/s once infected  (about 20 s to death)
 @export var gain_multiplier := 1.0   # scales Bite chunk + rate bonus (Exterminators < 1)
@@ -41,6 +44,7 @@ func bite(chunk: float, rate_bonus: float) -> void:
 		return
 	bonus_rate += rate_bonus * gain_multiplier
 	_set_value(value + chunk * gain_multiplier)
+	bitten.emit(chunk * gain_multiplier)
 
 
 ## Removes some Infection at once (Exterminator Cleanse, future cures).

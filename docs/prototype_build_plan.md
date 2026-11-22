@@ -137,5 +137,25 @@ M1–M7 are built and integrated on the `prototype` branch:
 - M6b is the boss balance pass: danger zones, followers dodging, and swarming the boss.
 - The Merchant quarter moved from M7 into M6.
 
+A UX pass followed. The contract is in `docs/dev/ux_contract.md`.
+- **In the Round:**
+  - a bullet-heaven HUD: Infection bar with the Exterminator mark, a Risk of Rain-style Vigilance strip, the boss bar and an ability bar;
+  - Pestilence and Bones icons that fly to the counters;
+  - Infection bars and Bite numbers over heads;
+  - a Lead Rat ring;
+  - hit feedback;
+  - a District title card;
+  - a pause menu with a stat sheet;
+  - a results screen that tallies the Round and previews the next Year.
+- **Upgrade Tree** in Nodebuster style:
+  - zoom, plus distinct node states: affordable, locked, maxed and "?" teasers;
+  - hold-to-buy and a tooltip beside the node.
+- **Polish on the Scroll Map.**
+- **New screens and systems:**
+  - a title screen;
+  - a settings panel;
+  - ink-blot scene transitions;
+  - gamepad and keyboard prompts that follow the last device used.
+
 Everything has been verified with headless runs, scripted tests and bot-driven screenshots.
 It has **not** been play-tested by hand yet, so difficulty and feel are unconfirmed.

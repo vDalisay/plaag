@@ -29,6 +29,10 @@
 ## --perf (prints FPS, rat, townsfolk and resident counts every 2 s, vsync
 ## off), --fill (the Spawner fills the street up to its cap at once),
 ## --no-batch (no mesh merging, see _batch_meshes).
+## HUD flags (read by scripts/ui/hud.gd): --results-test=<reason> ends the
+## Round after 6 s with that reason, --pause-test opens the pause menu after
+## 2 s, --toast-test fires one of each toast. Settings flags (autoload):
+## --reduce-motion, --no-numbers, --pad.
 ## Run flags (read by the Run autoload): --fresh wipes the save, --year=<n>
 ## plays this session in Year n without saving it.
 ##

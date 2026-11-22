@@ -13,6 +13,9 @@
 ## is hidden (out of group "rats", in "hidden_rats", ignores hits) and Bites
 ## the occupants until pour_out(). The bot runs for a door when hit down to 1.
 ## knockback() shoves it away from a broom; it costs no hit.
+## UX pass: a thin near-black ground ring (the shader inks it as a circle)
+## always marks the Lead Rat in the swarm; it flashes wide when hit and is
+## hidden while Hidden or dead.
 class_name LeadRat
 extends CharacterBody3D
 
@@ -34,6 +37,11 @@ const BOT_DODGE_TIME := 0.5
 ## Seconds between the bot's danger scans, and its look-ahead for lasting zones.
 const BOT_DODGE_SCAN := 0.1
 const BOT_LOOKAHEAD := 0.35
+## The ground ring marker: radius and stroke (u) and the flash on a hit.
+const RING_RADIUS := 0.8
+const RING_STROKE := 0.07
+const RING_FLASH_SCALE := 1.6
+const RING_FLASH_TIME := 0.35
 
 @export var max_speed := 6.0
 ## Units/s^2 towards the stick direction, and when letting go.
@@ -83,6 +91,8 @@ var _knock_left := 0.0
 var _bot_dodge_scan := 0.0
 var _bot_dodge_goal := Vector3.INF
 var _bot_skirt := Vector3.ZERO
+var _ring: Node3D
+var _ring_tween: Tween
 ## Dodges taken by the bot this Round (debug output).
 var bot_dodges := 0
 
@@ -104,6 +114,7 @@ func _ready() -> void:
 	_props.rat(_body, Vector3.ZERO, 0.0, visual_scale)
 	# One mesh per colour instead of nine parts (performance).
 	MeshBatcher.merge(_body)
+	_build_ring()
 	_bite.bit.connect(_on_bit)
 	_bot_stuck_from = global_position
 	_layer = collision_layer
@@ -139,6 +150,25 @@ func _physics_process(delta: float) -> void:
 		var yaw := atan2(flat.x, flat.z)
 		_visual.rotation.y = lerp_angle(_visual.rotation.y, yaw, 1.0 - exp(-turn_rate * delta))
 	_update_feeding(flat.length(), delta)
+
+
+## The ground ring: one thin near-black torus, flattened, under the rat.
+func _build_ring() -> void:
+	_ring = Node3D.new()
+	_ring.name = "Marker"
+	add_child(_ring)
+	_props.part(_ring, _props.torus(RING_RADIUS, RING_STROKE), Props.INK, Vector3(0, 0.06, 0), Vector3.ZERO, Vector3(1, 0.25, 1))
+
+
+## Widens the ring and eases it back (on a hit).
+func _flash_ring() -> void:
+	if _ring == null:
+		return
+	if _ring_tween and _ring_tween.is_valid():
+		_ring_tween.kill()
+	_ring.scale = Vector3(RING_FLASH_SCALE, 1.0, RING_FLASH_SCALE)
+	_ring_tween = create_tween().set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
+	_ring_tween.tween_property(_ring, "scale", Vector3.ONE, RING_FLASH_TIME).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
 func _input_direction() -> Vector3:
@@ -385,6 +415,8 @@ func hide_in(h: House) -> void:
 	_visual.visible = true
 	_body.rotation.x = 0.0
 	_bite.house = h
+	if _ring:
+		_ring.visible = false
 	var inside := h.door_position - h.door_normal * 0.45
 	_visual.rotation.y = atan2(-h.door_normal.x, -h.door_normal.z)
 	_kill_move_tween()
@@ -411,6 +443,8 @@ func _finish_out() -> void:
 	_visual.scale = Vector3.ONE
 	is_hidden = false
 	_bite.house = null
+	if _ring:
+		_ring.visible = not is_dead
 	remove_from_group("hidden_rats")
 	if not is_dead:
 		add_to_group("rats")
@@ -430,6 +464,7 @@ func hit() -> void:
 	if god_mode or is_dead or is_hidden or _invulnerable_left > 0.0:
 		return
 	hits_left = maxi(hits_left - 1, 0)
+	_flash_ring()
 	hurt.emit(hits_left)
 	if hits_left == 1:
 		_bot_want_hide = true
@@ -465,6 +500,8 @@ func _update_invulnerable(delta: float) -> void:
 func _die() -> void:
 	is_dead = true
 	remove_from_group("rats")
+	if _ring:
+		_ring.visible = false
 	_invulnerable_left = 0.0
 	_visual.visible = true
 	velocity = Vector3.ZERO

@@ -25,8 +25,18 @@ Design: [docs/game_concept.md](docs/game_concept.md) · terms:
 [GLOSSARY.md](GLOSSARY.md) · build plan and per-milestone contracts:
 [docs/prototype_build_plan.md](docs/prototype_build_plan.md), `docs/dev/`.
 
-Press Play: the main scene is the District ([scenes/game/district.tscn](scenes/game/district.tscn)).
-The loop is **Round → Upgrade Tree → Scroll Map → Round**.
+Press Play: the main scene is the title screen ([scenes/ui/title.tscn](scenes/ui/title.tscn)),
+with Continue, New Plague, Settings and Quit. The loop is **Round → results →
+Upgrade Tree → Scroll Map → Round**. Esc / P / Start pauses a Round. The pause
+menu has Settings, End the Round and Quit to Title, plus a sheet of your
+Colony's stats.
+
+The shared UI look lives in [scripts/ui/ui_kit.gd](scripts/ui/ui_kit.gd):
+palette, fonts, buttons and input prompts that switch between keyboard and
+gamepad glyphs. Player settings (screen shake, damage numbers, reduce motion,
+HUD size, fullscreen) are kept in `user://plaag_settings.cfg`, apart from the
+Run save. The UX pass is specified in
+[docs/dev/ux_contract.md](docs/dev/ux_contract.md).
 
 | Action | Keyboard + mouse | Gamepad |
 | --- | --- | --- |
@@ -36,12 +46,24 @@ The loop is **Round → Upgrade Tree → Scroll Map → Round**.
 | Raid (once unlocked) | click a house | A (nearest house) |
 | Continue / buy / begin | click, Enter | A |
 
-Useful flags (after `--`): `--fresh` wipes the save, `--dev` unlocks Hide,
+Any District flag below skips the title and goes straight into a Round
+(`--title` forces the title). Useful flags (after `--`): `--fresh` wipes the save, `--dev` unlocks Hide,
 Raid, Fleas and Contagion and enables R to restart, `--year=<n>` plays a Year
 without saving it, `--district=merchant`, `--stage=<0..2>`,
 `--start-colony=<n>`, `--god`, `--bot` (the Lead Rat plays itself),
-`--force-exterminator`, `--perf`, `--screenshot=<png>`. The full list is in
-the header of [scripts/game/district.gd](scripts/game/district.gd).
+`--force-exterminator`, `--perf`, `--screenshot=<png>`.
+
+UI test flags:
+- `--results-test=<timer|lead_rat_died|exterminator_beaten>` ends the Round after 6 s.
+- `--pause-test` opens the pause menu.
+- `--toast-test` shows every toast.
+- `--pad` shows gamepad prompts.
+- `--reduce-motion` and `--no-numbers` override those settings for the session.
+- On the Upgrade Tree: `--dev-hover=<id>` and `--dev-zoom=<z>`.
+- On the title: `--settings-test`.
+
+The full list is in the headers of
+[scripts/game/district.gd](scripts/game/district.gd) and the UI scripts.
 
 ## Running the style demo
 

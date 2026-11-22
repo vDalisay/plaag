@@ -1,36 +1,73 @@
-## The Upgrade Tree screen between Rounds: a parchment page with the
-## UpgradeNodeDefs from Run.all_nodes() drawn as ink circles joined by ink
-## lines (one line per `requires`). Under each circle are its level pips and
-## the next level's cost. Hidden nodes aren't drawn, unaffordable ones are
-## faded, maxed ones are filled with ink. Red is used only for plague nodes.
+## The Upgrade Tree screen between Rounds (Nodebuster-style): a parchment page
+## with the UpgradeNodeDefs from Run.all_nodes() drawn as ink circles joined
+## by ink lines (one line per `requires`), on a board you pan and zoom.
 ##
-## Input: click a node to buy it, drag empty parchment (or right/middle-drag
-## anywhere) to pan. Arrows / WASD / d-pad / stick move the focus between
-## nearby nodes, Enter / A buys the focused one, Space / Start goes on to the
-## Scroll Map (M7; "To the Map", Run.open_map()).
+## Node states, readable at a glance:
+## - Teaser: not visible yet, but one of its `requires` is: a dashed circle
+##   with "?" and no name or cost, so the tree visibly has more to give.
+## - Locked (requirement unmet): some but not all of its `requires` owned:
+##   faded, with a tiny lock.
+## - Can't afford: normal ink; the lacking currency in the cost line is faded
+##   and underlined.
+## - Affordable: a soft amber halo that breathes, and a one-time bounce when it
+##   becomes affordable (also on entering the tree, for nodes that were not
+##   affordable on the last visit).
+## - Maxed: filled with ink, parchment text and "MAX" instead of the cost.
+## Plague nodes (Lethality, Fleas, Contagion) are inked in red.
+##
+## Header: the wallet (IconRect icons; the shown numbers roll down after a
+## buy), "N upgrades within reach", the Year and "To the Map", which breathes
+## amber when nothing is within reach. A tooltip sits beside the hovered
+## (0.12 s delay) or focused (instant) node: name, level, description,
+## current -> next value, the cost with icons and "(need 3 more Bones)", and
+## a Buy prompt. A bottom hint bar of PromptHints lists the controls.
+##
+## Input: click / A / Enter buys; holding keeps buying (after 0.35 s, one
+## level every 0.2 s while affordable). Juice: the node punches, an ink ring
+## splashes out, "-4" floats up beside the wallet and the wallet rolls down;
+## newly revealed children ink in along their line (0.4 s) then fade in; a
+## failed buy shakes the node and flashes the lacking counter. Drag empty
+## parchment (or right / middle-drag anywhere, or the right stick) pans; the
+## mouse wheel zooms around the cursor, LT / RT (joy axes 4 / 5) and - / =
+## around the centre (0.55-1.6). Home / Y recentres on the focused node.
+## Arrows / WASD / d-pad / stick move the focus between nearby nodes. Space /
+## Start goes on to the Scroll Map (Run.open_map()); Esc / B to the title.
+## Zoom and pan persist across visits (static vars).
 ##
 ## Every Run call is guarded (get_node_or_null("/root/Run")) so the scene
 ## still opens without the autoload; it then shows the tree read-only.
 ## Debug flags (after `--`): --screenshot=<path> (saves a frame after
-## --screenshot-delay=<s>, default 1 s, and quits), --dev-focus=<id>; with
-## --dev also --dev-wallet=<p>,<b> (adds to the wallet) and --dev-buy=<id>,...
-## (buys those nodes in order, saving the Run).
+## --screenshot-delay=<s>, default 1 s, and quits), --dev-focus=<id>,
+## --dev-hover=<id> (focuses that node and shows its tooltip), --dev-zoom=<z>;
+## with --dev also --dev-wallet=<p>,<b> (adds to the wallet) and
+## --dev-buy=<id>,... (buys those nodes in order, saving the Run).
 extends Control
 
+enum State { HIDDEN, TEASER, LOCKED, OPEN, MAXED }
+
 const UPGRADES_DIR := "res://data/upgrades/"
-const PARCHMENT := Color(0.93, 0.88, 0.76)
-const PARCHMENT_DARK := Color(0.84, 0.77, 0.62)
-const INK := Color(0.13, 0.10, 0.08)
-const SEPIA := Color(0.36, 0.25, 0.15)
-const RED := Color(0.72, 0.12, 0.10)
+const TITLE_SCENE := "res://scenes/ui/title.tscn"
 ## Stats that are the plague itself: their nodes are inked in red.
 const PLAGUE_STATS := ["lethality", "unlock_fleas", "unlock_contagion"]
 ## Pixels per tree unit, node circle radius, node hit box size.
 const UNIT := 86.0
 const RADIUS := 38.0
 const NODE_SIZE := Vector2(104, 128)
-const FADED_ALPHA := 0.42
-const HEADER_HEIGHT := 64.0
+const CIRCLE := Vector2(52, 42)        # circle centre inside a node's box
+const LOCKED_ALPHA := 0.4
+const HEADER_HEIGHT := 72.0
+const HINT_HEIGHT := 52.0
+const SAFE := 24.0
+const ZOOM_MIN := 0.55
+const ZOOM_MAX := 1.6
+const INITIAL_ZOOM_MIN := 0.9
+const HOLD_DELAY := 0.35
+const HOLD_STEP := 0.2
+const HOVER_DELAY := 0.12
+const REVEAL_LINE := 0.4
+const REVEAL_FADE := 0.25
+const STICK_DEADZONE := 0.22
+const STICK_PAN_SPEED := 900.0
 ## stat key -> [label, format of one value]; "%" formats as a percentage.
 const STAT_INFO := {
 	"rat_speed": ["Lead Rat speed", "%.1f"],
@@ -54,38 +91,88 @@ const STAT_INFO := {
 	"raid_cooldown": ["Raid cooldown", "%.1f s"],
 }
 
+## Kept across visits: the view, and which nodes were affordable last time.
+static var _view_zoom := 0.0
+static var _view_pan := Vector2.ZERO
+static var _aff_seen := {}
+static var _aff_seen_valid := false
+
+
+## A PromptHint whose key cap is fixed text per device (for inputs that are
+## not InputMap actions: drag / wheel / sticks / triggers).
+class FixedHint extends PromptHint:
+	var key_text := ""
+	var pad_text := ""
+
+	static func make_fixed(p_key: String, p_pad: String, p_verb: String) -> FixedHint:
+		var h := FixedHint.new()
+		h.key_text = p_key
+		h.pad_text = p_pad
+		h.verb = p_verb
+		h.outline = 4
+		return h
+
+	func refresh() -> void:
+		if _cap_label != null:
+			_cap_label.text = pad_text if UiKit.is_gamepad() else key_text
+		if _verb_label != null:
+			_verb_label.text = verb
+			_verb_label.visible = verb != ""
+
+
 var _run: Node
 var _nodes: Array[UpgradeNodeDef] = []
 var _buttons := {}          # id -> Button
-var _fx := {}               # id -> {"fill": float, "splash": float, "shake": float}
-var _shown := {}            # id -> true once drawn (to fade in new nodes)
-var _selected: UpgradeNodeDef     # shown in the description panel
-var _from_mouse := false          # focus came from hovering: don't pan
+var _fx := {}               # id -> {"fill": float, "splash": float}
+var _state := {}            # id -> State (last refresh)
+var _aff := {}              # id -> bool, affordable at the last refresh
+var _reveal := {}           # id -> 0..1, the ink line growing towards a new node
+var _ready_done := false
+var _time := 0.0
+var _zoom := 1.0
 var _pan := Vector2.ZERO
 var _dragging := false
 var _pan_tween: Tween
-var _font: Font
-var _blot: Texture2D        # soft round stain
-var _vignette: Texture2D    # clear centre, dark edges
+var _font: Font             # MSDF body font: crisp at every zoom
+var _blot: Texture2D
+var _vignette: Texture2D
+var _reach := 0
+var _wallet_shown := Vector2.ZERO
+var _wallet_tween: Tween
+
+var _hold_id := ""
+var _hold_time := 0.0
+var _hold_next := 0.0
+
+var _tip_id := ""
+var _tip_wait := -1.0       # seconds until the pending tooltip shows; < 0 = none
+var _tip_pending := ""
+var _quiet_focus := false   # true while _focus_start() places the opening focus
+var _from_mouse := false
 
 var _bg: Control
 var _board: Control
-var _wallet_label: Label
+var _header: PanelContainer
+var _pest_label: Label
+var _bones_label: Label
+var _reach_label: Label
 var _year_label: Label
 var _begin: Button
-var _desc_title: Label
-var _desc_text: Label
-var _desc_effect: Label
-var _desc_status: Label
+var _begin_style: StyleBoxFlat
+var _tip: PanelContainer
+var _tip_box: VBoxContainer
 
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	_run = get_node_or_null("/root/Run")
-	_font = _make_font()
+	var f := (UiKit.body_font() as SystemFont).duplicate() as SystemFont
+	f.multichannel_signed_distance_field = true
+	_font = f
 	_blot = _radial([Color(1, 1, 1, 1), Color(1, 1, 1, 0.45), Color(1, 1, 1, 0)], [0.0, 0.55, 1.0])
 	_vignette = _radial([Color(1, 1, 1, 0), Color(1, 1, 1, 0.15), Color(1, 1, 1, 1)], [0.0, 0.75, 1.42])
-	theme = _make_theme()
+	theme = UiKit.theme()
+	_ensure_actions()
 	_nodes = _load_nodes()
 	_build()
 	if _run != null:
@@ -93,14 +180,37 @@ func _ready() -> void:
 		_run.connect("upgrades_changed", _refresh)
 	_apply_debug_args()
 	_refresh()
-	_centre_view(false)
+	_ready_done = true
+	_restore_view()
+	_greet_affordable()
 	_focus_start()
+	_apply_view_args()
 	resized.connect(_on_resized)
 
 
+func _exit_tree() -> void:
+	_view_zoom = _zoom
+	_view_pan = _pan
+
+
 func _on_resized() -> void:
-	_centre_view(false)
+	_apply_view()
 	_bg.queue_redraw()
+
+
+## Runtime-only actions for the hint bar (never saved to project.godot).
+func _ensure_actions() -> void:
+	var defs := {"tree_to_map": [KEY_SPACE, JOY_BUTTON_START], "tree_recenter": [KEY_HOME, JOY_BUTTON_Y]}
+	for action: String in defs:
+		if InputMap.has_action(action):
+			continue
+		InputMap.add_action(action)
+		var k := InputEventKey.new()
+		k.keycode = defs[action][0]
+		InputMap.action_add_event(action, k)
+		var j := InputEventJoypadButton.new()
+		j.button_index = defs[action][1]
+		InputMap.action_add_event(action, j)
 
 
 # ---------------------------------------------------------------------- Run access
@@ -109,8 +219,8 @@ func _load_nodes() -> Array[UpgradeNodeDef]:
 		return _run.call("all_nodes")
 	var out: Array[UpgradeNodeDef] = []
 	if DirAccess.dir_exists_absolute(UPGRADES_DIR):
-		for f in DirAccess.get_files_at(UPGRADES_DIR):
-			var n := load(UPGRADES_DIR + f.trim_suffix(".remap")) as UpgradeNodeDef
+		for file in DirAccess.get_files_at(UPGRADES_DIR):
+			var n := load(UPGRADES_DIR + file.trim_suffix(".remap")) as UpgradeNodeDef
 			if n != null:
 				out.append(n)
 	return out
@@ -126,16 +236,12 @@ func _cost(n: UpgradeNodeDef) -> Vector2i:
 	return Vector2i(n.cost_pestilence, n.cost_bones)
 
 
-func _is_shown(n: UpgradeNodeDef) -> bool:
+func _is_visible(n: UpgradeNodeDef) -> bool:
 	return bool(_run.call("is_visible", n)) if _run != null else n.requires.is_empty()
 
 
 func _can_buy(n: UpgradeNodeDef) -> bool:
 	return _run != null and bool(_run.call("can_buy", n))
-
-
-func _maxed(n: UpgradeNodeDef) -> bool:
-	return _level(n) >= n.max_level
 
 
 func _wallet() -> Vector2i:
@@ -157,13 +263,80 @@ func _find(id: String) -> UpgradeNodeDef:
 	return null
 
 
+## The node's state from the Run (see the header comment).
+func _compute_state(n: UpgradeNodeDef) -> State:
+	if _is_visible(n):
+		return State.MAXED if _level(n) >= n.max_level else State.OPEN
+	var owned_any := false
+	var visible_any := false
+	for id in n.requires:
+		var r := _find(id)
+		if r == null:
+			continue
+		if _level(r) >= 1:
+			owned_any = true
+		if _is_visible(r):
+			visible_any = true
+	if owned_any:
+		return State.LOCKED
+	if visible_any:
+		return State.TEASER
+	return State.HIDDEN
+
+
+## The state to draw: a node whose reveal line is still inking stays a teaser.
+func _draw_state(n: UpgradeNodeDef) -> State:
+	var st: State = _state.get(n.id, State.HIDDEN)
+	if _reveal.has(n.id) and (st == State.OPEN or st == State.MAXED):
+		return State.TEASER
+	return st
+
+
+func _shown(st: State) -> bool:
+	return st == State.OPEN or st == State.MAXED
+
+
 # ---------------------------------------------------------------------- actions
-func _try_buy(n: UpgradeNodeDef) -> void:
-	if _can_buy(n) and bool(_run.call("buy", n)):
-		_play_buy(n)
-	else:
+## Buys one level of `n` with all the juice; `from_hold` buys stay quiet when
+## they fail (the hold just stops).
+func _try_buy(n: UpgradeNodeDef, from_hold := false) -> bool:
+	var st: State = _state.get(n.id, State.HIDDEN)
+	if st == State.OPEN and _can_buy(n):
+		var c := _cost(n)
+		if bool(_run.call("buy", n)):
+			_play_buy(n, c)
+			_update_tip()
+			return true
+	if not from_hold:
 		_play_refuse(n)
-	_show_desc(n)
+	return false
+
+
+func _start_hold(n: UpgradeNodeDef) -> void:
+	_try_buy(n)
+	_hold_id = n.id
+	_hold_time = 0.0
+	_hold_next = HOLD_DELAY
+
+
+func _stop_hold() -> void:
+	_hold_id = ""
+
+
+func _process_hold(delta: float) -> void:
+	if _hold_id.is_empty():
+		return
+	var n := _find(_hold_id)
+	if n == null:
+		_stop_hold()
+		return
+	_hold_time += delta
+	while _hold_time >= _hold_next and not _hold_id.is_empty():
+		if _can_buy(n):
+			_try_buy(n, true)
+			_hold_next += HOLD_STEP
+		else:
+			_stop_hold()
 
 
 ## "To the Map": the Scroll Map (Run.open_map), or straight to the next Round
@@ -177,29 +350,75 @@ func _begin_round() -> void:
 		_run.call("start_round")
 
 
+func _to_title() -> void:
+	var t := get_node_or_null("/root/Transition")
+	if t != null and t.has_method("go"):
+		t.call("go", TITLE_SCENE)
+	elif ResourceLoader.exists(TITLE_SCENE):
+		get_tree().change_scene_to_file(TITLE_SCENE)
+
+
+func _busy() -> bool:
+	var t := get_node_or_null("/root/Transition")
+	return t != null and t.has_method("is_busy") and bool(t.call("is_busy"))
+
+
+func _focused_node() -> UpgradeNodeDef:
+	var f := get_viewport().gui_get_focus_owner()
+	if f != null and f.has_meta("node_id"):
+		return _find(str(f.get_meta("node_id")))
+	return null
+
+
 func _input(event: InputEvent) -> void:
-	# Space would also press the focused button (ui_accept): catch it first.
-	var begin := false
-	if event is InputEventKey:
-		var k := event as InputEventKey
-		begin = k.pressed and not k.echo and k.keycode == KEY_SPACE
-	elif event is InputEventJoypadButton:
-		var j := event as InputEventJoypadButton
-		begin = j.pressed and j.button_index == JOY_BUTTON_START
-	if begin:
+	if _busy():
+		return
+	if event.is_action_pressed("tree_to_map", false, true):
 		get_viewport().set_input_as_handled()
 		_begin_round()
 		return
-	# Right / middle drag pans anywhere, even over a node.
+	if event.is_action_pressed("tree_recenter", false, true):
+		get_viewport().set_input_as_handled()
+		_recenter()
+		return
+	if event.is_action_pressed("ui_cancel", false, true):
+		get_viewport().set_input_as_handled()
+		_to_title()
+		return
+	# Accept on a focused node: buy now, keep buying while held.
+	var fn := _focused_node()
+	if fn != null and event.is_action("ui_accept", true) and not (event is InputEventMouseButton):
+		get_viewport().set_input_as_handled()
+		if event.is_pressed() and not event.is_echo():
+			_start_hold(fn)
+		elif not event.is_pressed():
+			_stop_hold()
+		return
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_RIGHT or mb.button_index == MOUSE_BUTTON_MIDDLE:
 			_dragging = mb.pressed
+		elif mb.pressed and (mb.button_index == MOUSE_BUTTON_WHEEL_UP or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN):
+			if mb.position.y > HEADER_HEIGHT:
+				var k := 1.1 if mb.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0 / 1.1
+				_zoom_at(_zoom * pow(k, maxf(1.0, mb.factor)), mb.position)
+				get_viewport().set_input_as_handled()
+		elif mb.button_index == MOUSE_BUTTON_LEFT and not mb.pressed:
+			_stop_hold()
+			_dragging = false
 	elif event is InputEventMouseMotion and _dragging:
 		_pan_by((event as InputEventMouseMotion).relative)
+	elif event is InputEventKey and event.pressed:
+		var k := event as InputEventKey
+		if k.keycode in [KEY_EQUAL, KEY_PLUS, KEY_KP_ADD]:
+			_zoom_at(_zoom * 1.15, _area().get_center())
+		elif k.keycode in [KEY_MINUS, KEY_KP_SUBTRACT]:
+			_zoom_at(_zoom / 1.15, _area().get_center())
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if _busy():
+		return
 	# WASD (move_* actions) move the focus like the arrows do.
 	var sides := {"move_left": SIDE_LEFT, "move_right": SIDE_RIGHT, "move_up": SIDE_TOP, "move_down": SIDE_BOTTOM}
 	for action: String in sides:
@@ -225,57 +444,140 @@ func _on_bg_input(event: InputEvent) -> void:
 		_pan_by((event as InputEventMouseMotion).relative)
 
 
+## Mouse on a node: press buys (and holds), release stops.
+func _on_node_input(event: InputEvent, n: UpgradeNodeDef) -> void:
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.button_index != MOUSE_BUTTON_LEFT:
+			return
+		(_buttons[n.id] as Button).accept_event()
+		if mb.pressed:
+			_from_mouse = true
+			(_buttons[n.id] as Button).grab_focus()
+			_from_mouse = false
+			_start_hold(n)
+		else:
+			_stop_hold()
+
+
+# ---------------------------------------------------------------------- view
+func _area() -> Rect2:
+	return Rect2(0, HEADER_HEIGHT, size.x, maxf(1.0, size.y - HEADER_HEIGHT - HINT_HEIGHT))
+
+
+func _apply_view() -> void:
+	_pan = _clamp_pan(_pan)
+	_board.scale = Vector2(_zoom, _zoom)
+	_board.position = _area().get_center() + _pan
+	_view_zoom = _zoom
+	_view_pan = _pan
+
+
+func _set_pan(p: Vector2) -> void:
+	_pan = p
+	_apply_view()
+
+
 func _pan_by(delta: Vector2) -> void:
 	if _pan_tween != null:
 		_pan_tween.kill()
 	_set_pan(_pan + delta)
 
 
-func _set_pan(p: Vector2) -> void:
-	_pan = p
-	_board.position = _area().get_center() + _pan
+## Zooms to `z` keeping the board point under the screen point `at` still.
+func _zoom_at(z: float, at: Vector2) -> void:
+	z = clampf(z, ZOOM_MIN, ZOOM_MAX)
+	if is_equal_approx(z, _zoom):
+		return
+	if _pan_tween != null:
+		_pan_tween.kill()
+	var world := (at - _board.position) / _zoom
+	_zoom = z
+	_pan = at - world * _zoom - _area().get_center()
+	_apply_view()
 
 
-## The part of the screen the tree is drawn in (below the header).
-func _area() -> Rect2:
-	return Rect2(0, HEADER_HEIGHT, size.x, maxf(1.0, size.y - HEADER_HEIGHT))
-
-
-## Centres the visible nodes in the area.
-func _centre_view(animate: bool) -> void:
+## Board-space box of every drawn node.
+func _tree_box() -> Rect2:
 	var box := Rect2()
 	var first := true
 	for n in _nodes:
-		if not _is_shown(n):
+		if _state.get(n.id, State.HIDDEN) == State.HIDDEN:
 			continue
 		var r := Rect2((_buttons[n.id] as Button).get_meta("base_pos"), NODE_SIZE)
 		box = r if first else box.merge(r)
 		first = false
-	var target := -box.get_center()
-	if animate:
-		_tween_pan(target)
+	return box
+
+
+## Keeps at least part of the tree on screen.
+func _clamp_pan(p: Vector2) -> Vector2:
+	var box := _tree_box()
+	if not box.has_area():
+		return p
+	var area := _area()
+	var keep := 140.0
+	var origin := area.get_center() + p
+	var lo := origin + box.position * _zoom
+	var hi := origin + box.end * _zoom
+	if hi.x < area.position.x + keep:
+		p.x += area.position.x + keep - hi.x
+	if lo.x > area.end.x - keep:
+		p.x -= lo.x - (area.end.x - keep)
+	if hi.y < area.position.y + keep:
+		p.y += area.position.y + keep - hi.y
+	if lo.y > area.end.y - keep:
+		p.y -= lo.y - (area.end.y - keep)
+	return p
+
+
+## Restores the last visit's zoom and pan; on the first visit fits the tree,
+## but never below INITIAL_ZOOM_MIN (node text stays readable; pan for more).
+func _restore_view() -> void:
+	if _view_zoom > 0.0:
+		_zoom = _view_zoom
+		_pan = _view_pan
 	else:
-		_set_pan(target)
+		var box := _tree_box()
+		var area := _area().grow(-40.0)
+		_zoom = 1.0
+		if box.has_area():
+			_zoom = clampf(minf(area.size.x / box.size.x, area.size.y / box.size.y), INITIAL_ZOOM_MIN, 1.0)
+			_pan = -box.get_center() * _zoom
+			var full := _area()
+			if box.size.y * _zoom > full.size.y - 16.0:
+				# Too tall: show the top (the newest branches) rather than cut it.
+				_pan.y = full.position.y + 12.0 - full.get_center().y - box.position.y * _zoom
+	_apply_view()
 
 
 func _tween_pan(target: Vector2) -> void:
 	if _pan_tween != null:
 		_pan_tween.kill()
+	if UiKit.reduce_motion():
+		_set_pan(target)
+		return
 	_pan_tween = create_tween().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	_pan_tween.tween_method(_set_pan, _pan, target, 0.3)
 
 
-## Keeps the focused node on screen when the focus moves with keys / pad.
-func _on_node_focused(n: UpgradeNodeDef) -> void:
+## Home / Y: the focused node (else the tree) to the centre.
+func _recenter() -> void:
+	var n := _focused_node()
+	if n != null:
+		var b: Button = _buttons[n.id]
+		var p: Vector2 = (b.get_meta("base_pos") as Vector2) + CIRCLE
+		_tween_pan(-p * _zoom)
+	else:
+		var box := _tree_box()
+		_tween_pan(-box.get_center() * _zoom)
+
+
+## Keeps a node on screen when the focus moves with keys / pad.
+func _scroll_into_view(n: UpgradeNodeDef) -> void:
 	var b: Button = _buttons[n.id]
-	if not b.visible:
-		return
-	_show_desc(n)
-	_redraw_nodes()
-	if _from_mouse:
-		return
-	var rect := Rect2(b.position + _area().get_center() + _pan, b.size)
-	var view := _area().grow(-24.0)
+	var rect := b.get_global_rect()
+	var view := _area().grow(-SAFE)
 	if view.size.x <= 0.0 or view.size.y <= 0.0 or view.encloses(rect):
 		return
 	var shift := Vector2.ZERO
@@ -290,111 +592,394 @@ func _on_node_focused(n: UpgradeNodeDef) -> void:
 	_tween_pan(_pan + shift)
 
 
+func _on_node_focused(n: UpgradeNodeDef) -> void:
+	var b: Button = _buttons[n.id]
+	if not b.visible:
+		return
+	if _hold_id != n.id:
+		_stop_hold()
+	if _from_mouse:
+		_queue_tip(n.id, HOVER_DELAY)
+	elif _quiet_focus and not UiKit.is_gamepad():
+		# The opening focus: a mouse player hasn't pointed at anything yet,
+		# so don't cover the tree with a tooltip they didn't ask for.
+		pass
+	else:
+		_scroll_into_view(n)
+		_queue_tip(n.id, 0.0)
+
+
+func _on_node_unfocused(n: UpgradeNodeDef) -> void:
+	if _hold_id == n.id:
+		_stop_hold()
+	if _tip_id == n.id or _tip_pending == n.id:
+		_hide_tip()
+
+
+## Hovering a node focuses it, so mouse and pad share one selection.
+func _on_hover(n: UpgradeNodeDef) -> void:
+	_from_mouse = true
+	var b: Button = _buttons[n.id]
+	if b.has_focus():
+		_queue_tip(n.id, HOVER_DELAY)
+	else:
+		b.grab_focus()
+	_from_mouse = false
+
+
+func _on_unhover(n: UpgradeNodeDef) -> void:
+	if _hold_id == n.id and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+		_stop_hold()
+	if _tip_id == n.id or _tip_pending == n.id:
+		_hide_tip()
+
+
 func _focus_start() -> void:
 	var best: UpgradeNodeDef = null
 	for n in _nodes:
-		if _is_shown(n) and _can_buy(n) and (best == null or n.tree_position.length() < best.tree_position.length()):
+		if _state.get(n.id) == State.OPEN and _can_buy(n) and (best == null or n.tree_position.length() < best.tree_position.length()):
 			best = n
-	if best != null:
+	if best == null:
+		for n in _nodes:
+			if _state.get(n.id) in [State.OPEN, State.MAXED] and (best == null or n.tree_position.length() < best.tree_position.length()):
+				best = n
+	_quiet_focus = true
+	if best != null and _aff.values().has(true):
 		(_buttons[best.id] as Button).grab_focus()
 	else:
 		_begin.grab_focus()
-		var root := _find_root()
-		if root != null:
-			_show_desc(root)
+	_quiet_focus = false
 
 
-func _find_root() -> UpgradeNodeDef:
-	for n in _nodes:
-		if n.requires.is_empty():
-			return n
-	return null
+func _process(delta: float) -> void:
+	_time += delta
+	_process_hold(delta)
+	# Reveal lines ink in, then the node fades in.
+	for id: String in _reveal.keys():
+		_reveal[id] = float(_reveal[id]) + delta / REVEAL_LINE
+		if float(_reveal[id]) >= 1.0:
+			_reveal.erase(id)
+			var b: Button = _buttons[id]
+			b.modulate.a = 0.0
+			create_tween().tween_property(b, "modulate:a", 1.0, REVEAL_FADE)
+	# Right stick pans, triggers zoom about the centre.
+	if not _busy():
+		var stick := Vector2(_axis(JOY_AXIS_RIGHT_X), _axis(JOY_AXIS_RIGHT_Y))
+		if stick != Vector2.ZERO:
+			_pan_by(-stick * STICK_PAN_SPEED * delta)
+		var trig := _axis(JOY_AXIS_TRIGGER_RIGHT) - _axis(JOY_AXIS_TRIGGER_LEFT)
+		if trig != 0.0:
+			_zoom_at(_zoom * pow(2.2, trig * delta), _area().get_center())
+	# Tooltip: delayed show, then follow the node.
+	if _tip_wait >= 0.0:
+		_tip_wait -= delta
+		if _tip_wait < 0.0:
+			_show_tip(_tip_pending)
+	if _tip.visible:
+		_place_tip()
+	# The wallet labels show the rolling values.
+	_pest_label.text = str(roundi(_wallet_shown.x))
+	_bones_label.text = str(roundi(_wallet_shown.y))
+	# Nothing within reach: "To the Map" breathes amber.
+	if _reach == 0 and _run != null:
+		var k := 0.5 + 0.5 * sin(_time * 2.6)
+		_begin_style.border_color = UiKit.AMBER.darkened(0.45).lerp(UiKit.AMBER, k)
+		_begin_style.bg_color = UiKit.PARCHMENT_LIGHT.lerp(UiKit.AMBER.lightened(0.5), 0.25 + 0.5 * k)
+		_begin.add_theme_stylebox_override("normal", _begin_style)
+	else:
+		_begin.remove_theme_stylebox_override("normal")
+	_redraw_nodes()
+	_board.queue_redraw()
+
+
+func _axis(a: JoyAxis) -> float:
+	var v := 0.0
+	for d in Input.get_connected_joypads():
+		var x := Input.get_joy_axis(d, a)
+		if absf(x) > absf(v):
+			v = x
+	if absf(v) < STICK_DEADZONE:
+		return 0.0
+	return signf(v) * (absf(v) - STICK_DEADZONE) / (1.0 - STICK_DEADZONE)
 
 
 # ---------------------------------------------------------------------- feedback
-## Ink floods the circle, splashes outward, then settles to the node's state.
-func _play_buy(n: UpgradeNodeDef) -> void:
+## Ink floods the circle and splashes outward, the node punches, the spent
+## amounts float up beside the wallet and the wallet rolls down.
+func _play_buy(n: UpgradeNodeDef, cost: Vector2i) -> void:
 	var fx: Dictionary = _fx[n.id]
 	var t := create_tween()
-	t.tween_method(_set_fx.bind(n.id, "fill"), 0.0, 1.0, 0.18).set_ease(Tween.EASE_OUT)
-	t.parallel().tween_method(_set_fx.bind(n.id, "splash"), 0.0, 1.0, 0.45).set_ease(Tween.EASE_OUT)
-	t.tween_method(_set_fx.bind(n.id, "fill"), 1.0, 0.0, 0.35).set_delay(0.08)
+	t.tween_method(_set_fx.bind(n.id, "fill"), 0.0, 1.0, 0.14).set_ease(Tween.EASE_OUT)
+	t.parallel().tween_method(_set_fx.bind(n.id, "splash"), 0.0, 1.0, 0.4).set_ease(Tween.EASE_OUT)
+	t.tween_method(_set_fx.bind(n.id, "fill"), 1.0, 0.0, 0.25)
 	t.tween_callback(func() -> void: fx["splash"] = 0.0)
-	var b: Button = _buttons[n.id]
-	b.pivot_offset = Vector2(NODE_SIZE.x * 0.5, RADIUS + 4.0)
-	var pop := create_tween()
-	pop.tween_property(b, "scale", Vector2(1.12, 1.12), 0.08)
-	pop.tween_property(b, "scale", Vector2.ONE, 0.2).set_trans(Tween.TRANS_BACK)
+	_pop(n.id, 0.14)
+	if cost.x > 0:
+		_float_spent(_pest_label, "−%d" % cost.x)
+	if cost.y > 0:
+		_float_spent(_bones_label, "−%d" % cost.y)
 
 
-## A short sideways shake.
+## A short sideways shake, and the lacking wallet counters flash.
 func _play_refuse(n: UpgradeNodeDef) -> void:
+	var b: Button = _buttons[n.id]
+	var base: Vector2 = b.get_meta("base_pos")
+	if not UiKit.reduce_motion():
+		var t := create_tween()
+		t.tween_method(func(v: float) -> void:
+			b.position = base + Vector2(sin(v * TAU * 3.0) * 7.0 * (1.0 - v), 0), 0.0, 1.0, 0.32)
+		t.tween_callback(func() -> void: b.position = base)
+	if _state.get(n.id) != State.OPEN:
+		return
+	var c := _cost(n)
+	var w := _wallet()
+	if c.x > w.x:
+		_flash(_pest_label)
+	if c.y > w.y:
+		_flash(_bones_label)
+
+
+func _pop(id: String, amount: float) -> void:
+	if UiKit.reduce_motion():
+		return
+	var b: Button = _buttons[id]
+	b.pivot_offset = CIRCLE
+	var pop := create_tween()
+	pop.tween_property(b, "scale", Vector2.ONE * (1.0 + amount), 0.07)
+	pop.tween_property(b, "scale", Vector2.ONE, 0.2).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+
+func _flash(l: Label) -> void:
 	var t := create_tween()
-	t.tween_method(_set_fx.bind(n.id, "shake"), 0.0, 1.0, 0.35)
-	t.tween_callback(_set_fx.bind(0.0, n.id, "shake"))
+	for i in 2:
+		t.tween_property(l, "modulate:a", 0.15, 0.08)
+		t.tween_property(l, "modulate:a", 1.0, 0.1)
+	UiKit.punch(l, 0.25, 0.25)
+
+
+## "−4" rising (and fading) from beside a wallet counter.
+func _float_spent(beside: Label, text: String) -> void:
+	var l := UiKit.label(text, UiKit.SIZE_LARGE, UiKit.SEPIA, 4)
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(l)
+	var r := beside.get_global_rect()
+	l.position = Vector2(r.end.x + 8.0, r.position.y)
+	var t := create_tween().set_parallel()
+	if not UiKit.reduce_motion():
+		t.tween_property(l, "position:y", l.position.y + 30.0, 0.6).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
+	t.tween_property(l, "modulate:a", 0.0, 0.6).set_delay(0.15)
+	t.chain().tween_callback(l.queue_free)
 
 
 func _set_fx(v: float, id: String, key: String) -> void:
 	var fx: Dictionary = _fx[id]
 	fx[key] = v
-	var b: Button = _buttons[id]
-	if key == "shake":
-		var base: Vector2 = b.get_meta("base_pos")
-		b.position = base + Vector2(sin(v * TAU * 3.0) * 7.0 * (1.0 - v), 0)
-	b.queue_redraw()
+
+
+## Nodes that became affordable since the last visit bounce once on entering.
+func _greet_affordable() -> void:
+	var k := 0
+	for n in _nodes:
+		if bool(_aff.get(n.id, false)) and (not _aff_seen_valid or not _aff_seen.has(n.id)):
+			var id := n.id
+			get_tree().create_timer(0.3 + 0.06 * k).timeout.connect(func() -> void:
+				if is_inside_tree():
+					_pop(id, 0.18))
+			k += 1
+	_remember_affordable()
+
+
+func _remember_affordable() -> void:
+	_aff_seen = {}
+	for id: String in _aff:
+		if bool(_aff[id]):
+			_aff_seen[id] = true
+	_aff_seen_valid = true
 
 
 # ---------------------------------------------------------------------- refresh
 func _refresh() -> void:
 	var w := _wallet()
-	_wallet_label.text = "Pestilence  %d     Bones  %d" % [w.x, w.y]
-	var year := int(_run.get("year")) if _run != null else 1347
-	_year_label.text = "Year of Our Lord %d" % year
-	var revealed := false
+	if not _ready_done or UiKit.reduce_motion():
+		_wallet_shown = Vector2(w)
+	elif Vector2(w) != _wallet_shown:
+		if _wallet_tween != null:
+			_wallet_tween.kill()
+		_wallet_tween = create_tween()
+		_wallet_tween.tween_property(self, "_wallet_shown", Vector2(w), 0.35).set_ease(Tween.EASE_OUT)
+	var year: Variant = _run.get("year") if _run != null else null
+	_year_label.text = "Year of Our Lord %s" % (str(int(year)) if year != null else "—")
+	_reach = 0
 	for n in _nodes:
 		var b: Button = _buttons[n.id]
-		var show := _is_shown(n)
-		if show and not _shown.has(n.id):
-			_shown[n.id] = true
-			if is_node_ready():
-				revealed = true
+		var prev: State = _state.get(n.id, State.HIDDEN)
+		var st := _compute_state(n)
+		_state[n.id] = st
+		var aff := st == State.OPEN and _can_buy(n)
+		if aff:
+			_reach += 1
+		if _ready_done:
+			if _shown(st) and not _shown(prev) and prev != State.HIDDEN:
+				_reveal[n.id] = 0.0
+			elif prev == State.HIDDEN and st != State.HIDDEN:
 				b.modulate.a = 0.0
-				create_tween().tween_property(b, "modulate:a", 1.0, 0.4)
-		b.visible = show
-		b.queue_redraw()
-	_board.queue_redraw()
-	if revealed:
-		_centre_view(true)
-	var focus := get_viewport().gui_get_focus_owner()
-	if _selected != null:
-		_show_desc(_selected)
-	elif focus != null and focus.has_meta("node_id"):
-		_show_desc(_find(str(focus.get_meta("node_id"))))
+				var t := create_tween()
+				t.tween_interval(REVEAL_LINE)
+				t.tween_property(b, "modulate:a", 1.0, REVEAL_FADE)
+			if aff and not bool(_aff.get(n.id, false)):
+				_pop(n.id, 0.18)
+		_aff[n.id] = aff
+		b.visible = st != State.HIDDEN
+	if _ready_done:
+		_remember_affordable()
+	_reach_label.text = ("%d upgrade within reach" if _reach == 1 else "%d upgrades within reach") % _reach \
+		if _run != null else "—"
+	_update_tip()
 
 
-func _show_desc(n: UpgradeNodeDef) -> void:
+# ---------------------------------------------------------------------- tooltip
+func _queue_tip(id: String, delay: float) -> void:
+	if delay <= 0.0:
+		_tip_wait = -1.0
+		_show_tip(id)
+	else:
+		if _tip_id != id:
+			_tip.visible = false
+			_tip_id = ""
+		_tip_pending = id
+		_tip_wait = delay
+
+
+func _hide_tip() -> void:
+	_tip.visible = false
+	_tip_id = ""
+	_tip_pending = ""
+	_tip_wait = -1.0
+
+
+func _show_tip(id: String) -> void:
+	var n := _find(id)
+	if n == null or _state.get(id, State.HIDDEN) == State.HIDDEN:
+		_hide_tip()
+		return
+	_tip_id = id
+	_tip_pending = ""
+	_fill_tip(n)
+	_tip.visible = true
+	_place_tip()
+
+
+func _update_tip() -> void:
+	if _tip != null and _tip.visible and not _tip_id.is_empty():
+		_fill_tip(_find(_tip_id))
+		_place_tip()
+
+
+func _fill_tip(n: UpgradeNodeDef) -> void:
+	for c in _tip_box.get_children():
+		_tip_box.remove_child(c)
+		c.queue_free()
 	if n == null:
 		return
-	_selected = n
+	var st := _draw_state(n)
 	var lv := _level(n)
-	_desc_title.text = "%s   %d / %d" % [n.title, lv, n.max_level]
-	_desc_text.text = n.description
-	_desc_effect.text = _effect_text(n)
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 14)
+	_tip_box.add_child(head)
+	if st == State.TEASER:
+		head.add_child(UiKit.label("Not yet known", UiKit.SIZE_LARGE, UiKit.INK, 0, true))
+		var names: Array[String] = []
+		for rid in n.requires:
+			var r := _find(rid)
+			if r != null and _level(r) < 1:
+				names.append(r.title)
+		var l := UiKit.label("Buy %s to reveal." % " and ".join(names), UiKit.SIZE_BODY - 2, UiKit.SEPIA)
+		_tip_box.add_child(l)
+		return
+	var name_l := UiKit.label(n.title, UiKit.SIZE_LARGE, UiKit.RED_DARK if _is_plague(n) else UiKit.INK, 0, true)
+	name_l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(name_l)
+	var lvl := UiKit.label("Level %d / %d" % [lv, n.max_level], UiKit.SIZE_SMALL, UiKit.SEPIA)
+	lvl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	head.add_child(lvl)
+	var desc := UiKit.label(n.description, UiKit.SIZE_BODY - 2)
+	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	desc.custom_minimum_size.x = 300
+	_tip_box.add_child(desc)
+	var eff := _effect_text(n)
+	if not eff.is_empty():
+		_tip_box.add_child(UiKit.label(eff, UiKit.SIZE_BODY - 2, UiKit.SEPIA))
+	if st == State.LOCKED:
+		var names: Array[String] = []
+		for rid in n.requires:
+			var r := _find(rid)
+			if r != null and _level(r) < 1:
+				names.append(r.title)
+		_tip_box.add_child(UiKit.label("Locked: buy %s first." % " and ".join(names), UiKit.SIZE_SMALL, UiKit.SEPIA))
+		return
+	var rule := ColorRect.new()
+	rule.color = Color(UiKit.INK, 0.35)
+	rule.custom_minimum_size = Vector2(0, 1)
+	_tip_box.add_child(rule)
+	if st == State.MAXED:
+		_tip_box.add_child(UiKit.label("MAX: fully learned.", UiKit.SIZE_BODY - 2))
+		return
 	var c := _cost(n)
 	var w := _wallet()
-	if _maxed(n):
-		_desc_status.text = "Mastered."
-	elif _run == null:
-		_desc_status.text = "Costs %s  (no Run loaded)" % _cost_text(c)
-	elif c.x > w.x or c.y > w.y:
-		var lack: Array[String] = []
-		if c.x > w.x:
-			lack.append("%d Pestilence" % (c.x - w.x))
-		if c.y > w.y:
-			lack.append("%d Bones" % (c.y - w.y))
-		_desc_status.text = "Costs %s.  Short of %s." % [_cost_text(c), " and ".join(lack)]
-	else:
-		_desc_status.text = "Costs %s.  Click or press A to buy." % _cost_text(c)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 5)
+	_tip_box.add_child(row)
+	row.add_child(UiKit.label("Cost", UiKit.SIZE_BODY - 2, UiKit.SEPIA))
+	var lack: Array[String] = []
+	for k in 2:
+		var amount := c.x if k == 0 else c.y
+		if amount <= 0:
+			continue
+		var have := w.x if k == 0 else w.y
+		var short := _run != null and amount > have
+		var num := UiKit.label(str(amount), UiKit.SIZE_LARGE, UiKit.INK)
+		num.modulate.a = 0.45 if short else 1.0
+		row.add_child(num)
+		var icon := IconRect.make("pestilence" if k == 0 else "bones", 20)
+		icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		icon.modulate.a = 0.45 if short else 1.0
+		row.add_child(icon)
+		if short:
+			lack.append("%d more %s" % [amount - have, "Pestilence" if k == 0 else "Bones"])
+	if c == Vector2i.ZERO:
+		row.add_child(UiKit.label("free", UiKit.SIZE_BODY - 2))
+	if not lack.is_empty():
+		var need := UiKit.label("(need %s)" % " and ".join(lack), UiKit.SIZE_SMALL, UiKit.SEPIA)
+		need.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		row.add_child(need)
+	var hint := HBoxContainer.new()
+	hint.add_theme_constant_override("separation", 10)
+	_tip_box.add_child(hint)
+	hint.add_child(PromptHint.make("ui_accept", "Buy"))
+	if n.max_level - lv > 1:
+		hint.add_child(UiKit.label("hold to buy more", UiKit.SIZE_SMALL, UiKit.SEPIA))
+
+
+## Beside the node's circle, on the side facing away from the tree's centre
+## (so it covers as little of the tree as possible), kept on screen.
+func _place_tip() -> void:
+	if _tip_id.is_empty() or not _buttons.has(_tip_id):
+		return
+	var b: Button = _buttons[_tip_id]
+	_tip.reset_size()
+	var ts := _tip.size
+	var c := b.get_global_transform() * CIRCLE
+	var r := (RADIUS + 14.0) * _zoom
+	var centre := _board.get_global_transform() * _tree_box().get_center()
+	var right := c.x >= centre.x - 4.0
+	var x := c.x + r if right else c.x - r - ts.x
+	if right and x + ts.x > size.x - SAFE:
+		x = c.x - r - ts.x
+	elif not right and x < SAFE:
+		x = c.x + r
+	x = clampf(x, SAFE, maxf(SAFE, size.x - SAFE - ts.x))
+	var y := clampf(c.y - ts.y * 0.5, HEADER_HEIGHT + 8.0, maxf(HEADER_HEIGHT + 8.0, size.y - HINT_HEIGHT - 8.0 - ts.y))
+	_tip.position = Vector2(x, y).round()
 
 
 ## "Bite cooldown 1.20 s → 1.10 s" for every stat the next level changes.
@@ -415,7 +1000,9 @@ func _effect_text(n: UpgradeNodeDef) -> String:
 			lines.append(("Unlocked: %s" if lv >= 1 else "Unlocks %s") % _stat_label(key))
 			continue
 		var now := _stat(key)
-		if maxed:
+		if _run == null:
+			lines.append("%s %+.2f per level" % [_stat_label(key), delta])
+		elif maxed:
 			lines.append("%s %s" % [_stat_label(key), _fmt(key, now)])
 		else:
 			lines.append("%s %s  →  %s" % [_stat_label(key), _fmt(key, now), _fmt(key, now + delta)])
@@ -433,15 +1020,6 @@ func _fmt(key: String, v: float) -> String:
 	return f % v
 
 
-func _cost_text(c: Vector2i) -> String:
-	var parts: Array[String] = []
-	if c.x > 0:
-		parts.append("%d P" % c.x)
-	if c.y > 0:
-		parts.append("%d B" % c.y)
-	return "free" if parts.is_empty() else " · ".join(parts)
-
-
 static func _is_plague(n: UpgradeNodeDef) -> bool:
 	for key: String in PLAGUE_STATS:
 		if n.effects.has(key) or n.level_stat == key:
@@ -452,39 +1030,37 @@ static func _is_plague(n: UpgradeNodeDef) -> bool:
 # ---------------------------------------------------------------------- drawing
 func _draw_bg() -> void:
 	var s := _bg.size
-	_bg.draw_rect(Rect2(Vector2.ZERO, s), PARCHMENT)
+	_bg.draw_rect(Rect2(Vector2.ZERO, s), UiKit.PARCHMENT)
 	# Stains and foxing, always in the same places.
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 1347
 	for i in 34:
 		var p := Vector2(rng.randf() * s.x, rng.randf() * s.y)
 		var r := rng.randf_range(40.0, 260.0)
-		var c := SEPIA
+		var c := UiKit.SEPIA
 		c.a = rng.randf_range(0.05, 0.14)
 		_bg.draw_texture_rect(_blot, Rect2(p - Vector2(r, r * 0.8), Vector2(r, r * 0.8) * 2.0), false, c)
 	for i in 60:
 		var p := Vector2(rng.randf() * s.x, rng.randf() * s.y)
-		var c := SEPIA
+		var c := UiKit.SEPIA
 		c.a = rng.randf_range(0.05, 0.14)
 		_bg.draw_circle(p, rng.randf_range(0.8, 2.6), c)
-	# Darkened edges.
-	_bg.draw_texture_rect(_vignette, Rect2(Vector2.ZERO, s), false, Color(SEPIA, 0.55))
+	_bg.draw_texture_rect(_vignette, Rect2(Vector2.ZERO, s), false, Color(UiKit.SEPIA, 0.55))
 	# Double ink rule round the page.
-	var ink := INK
-	ink.a = 0.8
-	_bg.draw_rect(Rect2(Vector2(14, 14), s - Vector2(28, 28)), ink, false, 2.0)
-	ink.a = 0.5
-	_bg.draw_rect(Rect2(Vector2(20, 20), s - Vector2(40, 40)), ink, false, 1.0)
+	_bg.draw_rect(Rect2(Vector2(14, 14), s - Vector2(28, 28)), Color(UiKit.INK, 0.8), false, 2.0)
+	_bg.draw_rect(Rect2(Vector2(20, 20), s - Vector2(40, 40)), Color(UiKit.INK, 0.5), false, 1.0)
 
 
-## Requirement lines between the visible nodes, edge to edge.
+## Requirement lines, edge to edge: solid to bought / visible nodes (inking
+## in while a node is revealed), dashed to teasers, faint to locked ones.
 func _draw_board() -> void:
 	for n in _nodes:
-		if not _is_shown(n):
+		var st: State = _state.get(n.id, State.HIDDEN)
+		if st == State.HIDDEN:
 			continue
 		for req_id in n.requires:
 			var r := _find(req_id)
-			if r == null or not _is_shown(r):
+			if r == null or not _shown(_draw_state(r)):
 				continue
 			var a := r.tree_position * UNIT
 			var b := n.tree_position * UNIT
@@ -492,9 +1068,19 @@ func _draw_board() -> void:
 			var to := _line_end(b, a)
 			if from.distance_to(b) <= to.distance_to(b):
 				continue
-			var c := INK
-			c.a = 0.85 if _level(n) > 0 else 0.45
-			_wobbly_line(_board, from, to, c, 2.2 if _level(n) > 0 else 1.6, hash(n.id + req_id))
+			var seed_value := hash(n.id + req_id)
+			var owned := _level(n) > 0
+			if st == State.TEASER or (st == State.LOCKED and _level(r) < 1):
+				_dashed_line(_board, from, to, Color(UiKit.INK, 0.4), 1.4)
+			elif st == State.LOCKED:
+				_wobbly_line(_board, from, to, Color(UiKit.INK, 0.3), 1.4, seed_value)
+			elif _reveal.has(n.id):
+				_dashed_line(_board, from, to, Color(UiKit.INK, 0.4), 1.4)
+				var t := ease(clampf(float(_reveal[n.id]), 0.0, 1.0), 0.6)
+				_wobbly_line(_board, from, from.lerp(to, t), UiKit.INK, 2.4, seed_value)
+				_board.draw_circle(from.lerp(to, t), 3.2, UiKit.INK)
+			else:
+				_wobbly_line(_board, from, to, Color(UiKit.INK, 0.85 if owned else 0.6), 2.2 if owned else 1.7, seed_value)
 
 
 ## Where a line from node centre `p` towards `q` leaves that node's circle
@@ -512,12 +1098,20 @@ func _wobbly_line(ci: CanvasItem, a: Vector2, b: Vector2, c: Color, width: float
 	var pts := PackedVector2Array()
 	var steps := maxi(4, int(a.distance_to(b) / 12.0))
 	var normal := (b - a).normalized().orthogonal()
-	var ph := float(seed_value % 1000) * 0.01
+	var ph := float(absi(seed_value) % 1000) * 0.01
 	for i in steps + 1:
 		var t := float(i) / float(steps)
 		var off := sin(t * 7.0 + ph) * 1.3 + sin(t * 17.0 + ph * 2.0) * 0.6
 		pts.append(a.lerp(b, t) + normal * off * sin(t * PI))
 	ci.draw_polyline(pts, c, width, true)
+
+
+func _dashed_line(ci: CanvasItem, a: Vector2, b: Vector2, c: Color, width: float) -> void:
+	var dist := a.distance_to(b)
+	var t := 0.0
+	while t < dist:
+		ci.draw_line(a.lerp(b, t / dist), a.lerp(b, minf(t + 6.0, dist) / dist), c, width, true)
+		t += 11.0
 
 
 func _wobbly_circle(ci: CanvasItem, centre: Vector2, r: float, c: Color, width: float, ph: float) -> void:
@@ -529,62 +1123,73 @@ func _wobbly_circle(ci: CanvasItem, centre: Vector2, r: float, c: Color, width: 
 	ci.draw_polyline(pts, c, width, true)
 
 
+func _dashed_circle(ci: CanvasItem, c: Vector2, r: float, col: Color, dashes := 18, width := 1.6) -> void:
+	for i in dashes:
+		var a0 := float(i) / float(dashes) * TAU
+		ci.draw_arc(c, r, a0, a0 + TAU / float(dashes) * 0.55, 4, col, width, true)
+
+
+func _text_c(ci: CanvasItem, at: Vector2, s: String, fs: int, col: Color) -> void:
+	var w := _font.get_string_size(s, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	ci.draw_string(_font, Vector2(at.x - w * 0.5, at.y), s, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
+
+
 func _draw_node(b: Button, n: UpgradeNodeDef) -> void:
+	var st := _draw_state(n)
+	var c := CIRCLE
+	var ph := float(absi(hash(n.id)) % 100) * 0.1
+	var focused := b.has_focus()
+	if st == State.TEASER:
+		_draw_teaser(b, c, focused)
+		return
 	var fx: Dictionary = _fx[n.id]
 	var lv := _level(n)
-	var maxed := lv >= n.max_level
-	var affordable := maxed or _can_buy(n) or _run == null
-	var ink := RED if _is_plague(n) else INK
-	var c := Vector2(NODE_SIZE.x * 0.5, RADIUS + 4.0)
-	var ph := float(hash(n.id) % 100) * 0.1
-	var alpha := 1.0 if affordable else FADED_ALPHA
-	var line := ink
-	line.a = alpha
-	var focused := b.has_focus()
-	# Splash: droplets thrown out of the circle.
+	var maxed := st == State.MAXED
+	var locked := st == State.LOCKED
+	var aff := st == State.OPEN and bool(_aff.get(n.id, false))
+	var ink := UiKit.RED if _is_plague(n) else UiKit.INK
+	var alpha := LOCKED_ALPHA if locked else 1.0
+	var line := Color(ink, alpha)
+	# Affordable: a soft amber halo that breathes.
+	if aff:
+		var k := 0.5 + 0.5 * sin(_time * 2.4 + ph)
+		b.draw_circle(c, RADIUS + 12.0 + 2.0 * k, Color(UiKit.AMBER, 0.10 + 0.08 * k))
+		b.draw_circle(c, RADIUS + 7.0 + 1.5 * k, Color(UiKit.AMBER, 0.16 + 0.08 * k))
+		b.draw_arc(c, RADIUS + 5.0 + 1.5 * k, 0.0, TAU, 48, Color(UiKit.AMBER.darkened(0.1), 0.55 + 0.3 * k), 2.5, true)
+	# Splash: an ink ring and droplets thrown out of the circle.
 	var splash: float = fx["splash"]
 	if splash > 0.0:
-		var drop := ink
-		drop.a = 1.0 - splash
 		for i in 9:
 			var ang := float(i) / 9.0 * TAU + ph
 			var dist := RADIUS + 6.0 + splash * (18.0 + float((i * 7) % 5) * 5.0)
-			b.draw_circle(c + Vector2(cos(ang), sin(ang)) * dist, 4.0 * (1.0 - splash) + 1.0, drop)
-		var ring := ink
-		ring.a = (1.0 - splash) * 0.6
-		_wobbly_circle(b, c, RADIUS + 4.0 + splash * 22.0, ring, 2.0, ph)
+			b.draw_circle(c + Vector2(cos(ang), sin(ang)) * dist, 4.0 * (1.0 - splash) + 1.0, Color(ink, 1.0 - splash))
+		_wobbly_circle(b, c, RADIUS + 4.0 + splash * 26.0, Color(ink, (1.0 - splash) * 0.8), 3.0 * (1.0 - splash) + 1.0, ph)
 	# Body.
-	var fill := PARCHMENT.lightened(0.25) if not maxed else ink
-	fill.a = alpha if not maxed else 1.0
-	b.draw_circle(c, RADIUS, fill)
-	if lv > 0 and not maxed:
-		# Owned but not maxed: an inner hatch-like ring.
-		var inner := ink
-		inner.a = 0.35
-		b.draw_arc(c, RADIUS - 6.0, 0.0, TAU, 40, inner, 3.0, true)
+	if maxed:
+		b.draw_circle(c, RADIUS, ink)
+	else:
+		b.draw_circle(c, RADIUS, Color(UiKit.PARCHMENT_LIGHT, 0.95 if not locked else 0.6))
+		if lv > 0:
+			b.draw_arc(c, RADIUS - 6.0, 0.0, TAU, 40, Color(ink, 0.35), 3.0, true)
 	var flood: float = fx["fill"]
 	if flood > 0.0:
 		b.draw_circle(c, RADIUS * flood, ink)
-	_wobbly_circle(b, c, RADIUS, line, 3.0 if focused else 2.4, ph)
-	var second := line
-	second.a *= 0.4
-	_wobbly_circle(b, c, RADIUS + 1.5, second, 1.0, ph + 2.0)
+	_wobbly_circle(b, c, RADIUS, line, 3.2 if focused else 2.4, ph)
+	_wobbly_circle(b, c, RADIUS + 1.5, Color(line, line.a * 0.4), 1.0, ph + 2.0)
 	if focused:
-		var halo := line
-		halo.a *= 0.7
-		_dashed_circle(b, c, RADIUS + 9.0, halo)
+		_dashed_circle(b, c, RADIUS + (17.0 if aff else 9.0), Color(UiKit.INK, 0.8), 22, 2.0)
 	# Title inside, one word per line.
-	var text_col := PARCHMENT if (maxed or flood > 0.5) else line
+	var text_col := UiKit.PARCHMENT_LIGHT if (maxed or flood > 0.5) else line
 	var words := n.title.split(" ")
 	var fs := 15 if n.title.length() <= 10 else 14
 	var lh := float(fs) + 2.0
 	var y0 := c.y - (float(words.size()) * lh) * 0.5 + float(fs) * 0.8
 	for i in words.size():
-		var wsz := _font.get_string_size(words[i], HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
-		b.draw_string(_font, Vector2(c.x - wsz.x * 0.5, y0 + float(i) * lh), words[i],
-			HORIZONTAL_ALIGNMENT_LEFT, -1, fs, text_col)
+		_text_c(b, Vector2(c.x, y0 + float(i) * lh), words[i], fs, text_col)
+	if locked:
+		_draw_lock(b, c + Vector2(RADIUS * 0.72, -RADIUS * 0.72), Color(UiKit.INK, 0.75))
 	# Level pips.
-	var pip_y := c.y + RADIUS + 15.0
+	var pip_y := c.y + RADIUS + 13.0
 	var gap := 13.0
 	var x0 := c.x - gap * float(n.max_level - 1) * 0.5
 	for i in n.max_level:
@@ -593,21 +1198,74 @@ func _draw_node(b: Button, n: UpgradeNodeDef) -> void:
 			b.draw_circle(p, 4.2, line)
 		else:
 			b.draw_arc(p, 4.0, 0.0, TAU, 16, line, 1.4, true)
-	# Cost.
-	var cost_str := "mastered" if maxed else _cost_text(_cost(n))
-	var cs := 14
-	var csz := _font.get_string_size(cost_str, HORIZONTAL_ALIGNMENT_LEFT, -1, cs)
-	var cost_col := INK
-	cost_col.a = alpha
-	b.draw_string(_font, Vector2(c.x - csz.x * 0.5, pip_y + 22.0), cost_str,
-		HORIZONTAL_ALIGNMENT_LEFT, -1, cs, cost_col)
+	if locked:
+		return
+	# Cost line (or MAX).
+	var cy := pip_y + 24.0
+	if maxed:
+		_text_c(b, Vector2(c.x, cy), "MAX", 15, UiKit.INK)
+		return
+	_draw_cost(b, Vector2(c.x, cy), _cost(n), _wallet())
 
 
-func _dashed_circle(ci: CanvasItem, c: Vector2, r: float, col: Color) -> void:
-	var dashes := 18
-	for i in dashes:
-		var a0 := float(i) / float(dashes) * TAU
-		ci.draw_arc(c, r, a0, a0 + TAU / float(dashes) * 0.55, 4, col, 1.6, true)
+## "4 (drop) 1 (bones)": the lacking currency faded, with a short underline.
+func _draw_cost(ci: CanvasItem, at: Vector2, cost: Vector2i, w: Vector2i) -> void:
+	var fs := 15
+	var icon := 15.0
+	var parts: Array = []
+	var total := 0.0
+	for k in 2:
+		var amount := cost.x if k == 0 else cost.y
+		if amount <= 0:
+			continue
+		var s := str(amount)
+		var tw := _font.get_string_size(s, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+		var short := _run != null and amount > (w.x if k == 0 else w.y)
+		parts.append([s, tw, "pestilence" if k == 0 else "bones", short])
+		total += tw + 2.0 + icon
+	if parts.is_empty():
+		_text_c(ci, at, "free", fs, UiKit.INK)
+		return
+	total += 8.0 * float(parts.size() - 1)
+	var x := at.x - total * 0.5
+	for p: Array in parts:
+		var short: bool = p[3]
+		var a := 0.42 if short else 1.0
+		ci.draw_string(_font, Vector2(x, at.y), p[0], HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(UiKit.INK, a))
+		var ix := x + float(p[1]) + 2.0
+		var mod := Color(1, 1, 1, a)
+		_icon_faded(ci, str(p[2]), Vector2(ix + icon * 0.5, at.y - fs * 0.33), icon, mod)
+		if short:
+			ci.draw_line(Vector2(x, at.y + 4.0), Vector2(ix + icon, at.y + 4.0), Color(UiKit.INK, 0.6), 1.4, true)
+		x = ix + icon + 8.0
+
+
+func _icon_faded(ci: CanvasItem, kind: String, c: Vector2, s: float, mod: Color) -> void:
+	if mod.a >= 1.0:
+		UiIcons.draw(ci, kind, c, s)
+		return
+	# Faded: draw in a lighter ink (UiIcons keeps its own red for the drop).
+	UiIcons.draw(ci, kind, c, s, Color(UiKit.INK, mod.a))
+	ci.draw_circle(c, s * 0.62, Color(UiKit.PARCHMENT_LIGHT, 1.0 - mod.a))
+
+
+func _draw_teaser(b: Button, c: Vector2, focused: bool) -> void:
+	b.draw_circle(c, RADIUS * 0.78, Color(UiKit.PARCHMENT_LIGHT, 0.5))
+	_dashed_circle(b, c, RADIUS * 0.78, Color(UiKit.INK, 0.6), 16, 2.0)
+	var fs := 30
+	var f := UiKit.display_font()
+	var w := f.get_string_size("?", HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	b.draw_string(f, Vector2(c.x - w * 0.5, c.y + fs * 0.33), "?", HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(UiKit.INK, 0.6))
+	if focused:
+		_dashed_circle(b, c, RADIUS * 0.78 + 8.0, Color(UiKit.INK, 0.8), 22, 2.0)
+
+
+func _draw_lock(ci: CanvasItem, c: Vector2, col: Color) -> void:
+	ci.draw_circle(c, 11.0, UiKit.PARCHMENT_LIGHT)
+	ci.draw_arc(c + Vector2(0, -2), 4.5, PI, TAU, 10, col, 2.0, true)
+	ci.draw_line(c + Vector2(-4.5, -2), c + Vector2(-4.5, 0), col, 2.0)
+	ci.draw_line(c + Vector2(4.5, -2), c + Vector2(4.5, 0), col, 2.0)
+	ci.draw_rect(Rect2(c + Vector2(-6.5, 0), Vector2(13, 9)), col)
 
 
 # ---------------------------------------------------------------------- building
@@ -626,121 +1284,144 @@ func _build() -> void:
 	_board.draw.connect(_draw_board)
 	add_child(_board)
 	for n in _nodes:
-		_fx[n.id] = {"fill": 0.0, "splash": 0.0, "shake": 0.0}
+		_fx[n.id] = {"fill": 0.0, "splash": 0.0}
 		var b := Button.new()
 		b.name = "Node_" + n.id
 		b.flat = true
 		b.focus_mode = Control.FOCUS_ALL
 		b.size = NODE_SIZE
-		b.position = n.tree_position * UNIT - Vector2(NODE_SIZE.x * 0.5, RADIUS + 4.0)
+		b.position = n.tree_position * UNIT - CIRCLE
 		b.set_meta("base_pos", b.position)
 		b.set_meta("node_id", n.id)
 		for style in ["normal", "hover", "pressed", "focus", "disabled", "hover_pressed"]:
 			b.add_theme_stylebox_override(style, StyleBoxEmpty.new())
 		b.draw.connect(_draw_node.bind(b, n))
-		b.pressed.connect(_try_buy.bind(n))
+		b.gui_input.connect(_on_node_input.bind(n))
 		b.focus_entered.connect(_on_node_focused.bind(n))
-		b.focus_exited.connect(_redraw_nodes)
+		b.focus_exited.connect(_on_node_unfocused.bind(n))
 		b.mouse_entered.connect(_on_hover.bind(n))
+		b.mouse_exited.connect(_on_unhover.bind(n))
 		_board.add_child(b)
 		_buttons[n.id] = b
-		if _is_shown(n):
-			_shown[n.id] = true
 
-	# Header: wallet, page title, Year and the To the Map button.
-	var header := PanelContainer.new()
-	header.name = "Header"
-	header.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
-	header.custom_minimum_size.y = HEADER_HEIGHT
+	_build_header()
+	_build_hints()
+
+	_tip = PanelContainer.new()
+	_tip.name = "Tooltip"
+	_tip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_tip.visible = false
+	_tip.add_theme_stylebox_override("panel", UiKit.panel_box(Color(UiKit.PARCHMENT_LIGHT, 0.97), 2, 14, 3))
+	add_child(_tip)
+	_tip_box = VBoxContainer.new()
+	_tip_box.add_theme_constant_override("separation", 6)
+	_tip_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_tip.add_child(_tip_box)
+
+
+func _build_header() -> void:
+	_header = PanelContainer.new()
+	_header.name = "Header"
+	_header.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
+	_header.custom_minimum_size.y = HEADER_HEIGHT
 	var hs := StyleBoxFlat.new()
-	hs.bg_color = PARCHMENT.darkened(0.03)
-	hs.border_color = INK
+	hs.bg_color = UiKit.PARCHMENT.darkened(0.03)
+	hs.border_color = UiKit.INK
 	hs.border_width_bottom = 2
 	hs.content_margin_left = 36
 	hs.content_margin_right = 30
 	hs.content_margin_top = 8
 	hs.content_margin_bottom = 8
-	header.add_theme_stylebox_override("panel", hs)
-	add_child(header)
+	_header.add_theme_stylebox_override("panel", hs)
+	add_child(_header)
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 24)
-	header.add_child(row)
-	_wallet_label = _label(row, 22)
-	_wallet_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var heading := _label(row, 28)
-	heading.text = "The Upgrade Tree"
-	heading.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_theme_constant_override("separation", 16)
+	_header.add_child(row)
+
+	var left := HBoxContainer.new()
+	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	left.size_flags_stretch_ratio = 1.0
+	left.add_theme_constant_override("separation", 8)
+	row.add_child(left)
+	left.add_child(_centered(IconRect.make("pestilence", 28)))
+	_pest_label = UiKit.label("—", UiKit.SIZE_LARGE)
+	_pest_label.custom_minimum_size.x = 44
+	left.add_child(_pest_label)
+	left.add_child(_centered(IconRect.make("bones", 28)))
+	_bones_label = UiKit.label("—", UiKit.SIZE_LARGE)
+	_bones_label.custom_minimum_size.x = 44
+	left.add_child(_bones_label)
+	_reach_label = UiKit.label("—", UiKit.SIZE_SMALL + 2, UiKit.SEPIA)
+	_reach_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	left.add_child(_reach_label)
+
+	var heading := UiKit.label("The Upgrade Tree", UiKit.SIZE_TITLE, UiKit.INK, 0, true)
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_year_label = _label(row, 20)
-	_year_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_year_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	heading.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	row.add_child(heading)
+
+	var right := HBoxContainer.new()
+	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	right.alignment = BoxContainer.ALIGNMENT_END
+	right.add_theme_constant_override("separation", 18)
+	row.add_child(right)
+	_year_label = UiKit.label("—", UiKit.SIZE_BODY)
+	_year_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	right.add_child(_year_label)
 	_begin = Button.new()
 	_begin.text = "To the Map"
 	_begin.add_theme_font_size_override("font_size", 20)
 	_begin.focus_mode = Control.FOCUS_ALL
+	_begin.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_begin.pressed.connect(_begin_round)
-	row.add_child(_begin)
-
-	# Top-right: the description of the hovered / focused node.
-	var desc := PanelContainer.new()
-	desc.name = "Description"
-	desc.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	desc.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT, Control.PRESET_MODE_MINSIZE, 30)
-	desc.offset_top = HEADER_HEIGHT + 14.0
-	desc.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	desc.custom_minimum_size = Vector2(330, 0)
-	desc.add_theme_stylebox_override("panel", _box(Color(PARCHMENT.lightened(0.15), 0.92), 2, 14))
-	add_child(desc)
-	var dbox := VBoxContainer.new()
-	dbox.add_theme_constant_override("separation", 6)
-	desc.add_child(dbox)
-	_desc_title = _label(dbox, 22)
-	_desc_text = _label(dbox, 16)
-	_desc_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_desc_text.custom_minimum_size.x = 300
-	_desc_effect = _label(dbox, 16)
-	_desc_effect.add_theme_color_override("font_color", SEPIA)
-	_desc_status = _label(dbox, 15)
-	_desc_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_desc_status.custom_minimum_size.x = 300
-
-	# Bottom-left: the controls.
-	var hint := _label(self, 14)
-	hint.name = "Hint"
-	hint.text = "Click / A: buy     Drag: pan     Space / Start: To the Map"
-	hint.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_LEFT, Control.PRESET_MODE_MINSIZE, 32)
-	hint.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	hint.add_theme_color_override("font_color", SEPIA)
+	right.add_child(_begin)
+	_begin_style = UiKit.panel_box(UiKit.PARCHMENT_LIGHT, 3, 0, 3)
+	_begin_style.shadow_size = 0
+	_begin_style.content_margin_left = 18
+	_begin_style.content_margin_right = 18
+	_begin_style.content_margin_top = 6
+	_begin_style.content_margin_bottom = 6
 
 
-## Hovering a node focuses it, so mouse and pad share one selection.
-func _on_hover(n: UpgradeNodeDef) -> void:
-	_from_mouse = true
-	(_buttons[n.id] as Button).grab_focus()
-	_from_mouse = false
+func _centered(c: Control) -> Control:
+	c.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	return c
+
+
+func _build_hints() -> void:
+	var foot := PanelContainer.new()
+	foot.name = "Footer"
+	foot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	foot.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+	foot.offset_top = -HINT_HEIGHT
+	foot.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	var fs := StyleBoxFlat.new()
+	fs.bg_color = UiKit.PARCHMENT.darkened(0.03)
+	fs.border_color = UiKit.INK
+	fs.border_width_top = 2
+	fs.content_margin_bottom = 4
+	foot.add_theme_stylebox_override("panel", fs)
+	add_child(foot)
+	var bar := HBoxContainer.new()
+	bar.name = "Hints"
+	bar.alignment = BoxContainer.ALIGNMENT_CENTER
+	bar.add_theme_constant_override("separation", 26)
+	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	foot.add_child(bar)
+	bar.add_child(PromptHint.make("ui_accept", "Buy (hold for more)", UiKit.SIZE_SMALL, 4))
+	bar.add_child(FixedHint.make_fixed("Drag", "R-stick", "Pan"))
+	bar.add_child(FixedHint.make_fixed("Wheel", "LT / RT", "Zoom"))
+	bar.add_child(PromptHint.make("tree_recenter", "Recenter", UiKit.SIZE_SMALL, 4))
+	bar.add_child(PromptHint.make("tree_to_map", "To the Map", UiKit.SIZE_SMALL, 4))
+	bar.add_child(PromptHint.make("ui_cancel", "Title", UiKit.SIZE_SMALL, 4))
+	for h: Control in bar.get_children():
+		h.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 
 
 func _redraw_nodes() -> void:
 	for b: Button in _buttons.values():
-		b.queue_redraw()
-
-
-func _label(parent: Control, font_size: int) -> Label:
-	var l := Label.new()
-	l.add_theme_font_size_override("font_size", font_size)
-	l.add_theme_color_override("font_color", INK)
-	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	parent.add_child(l)
-	return l
-
-
-func _box(fill: Color, border: int, margin: int) -> StyleBoxFlat:
-	var s := StyleBoxFlat.new()
-	s.bg_color = fill
-	s.border_color = INK
-	s.set_border_width_all(border)
-	s.set_content_margin_all(margin)
-	return s
+		if b.visible:
+			b.queue_redraw()
 
 
 ## A radial gradient texture (centre to corner) in white, tinted when drawn.
@@ -755,42 +1436,6 @@ func _radial(colors: Array[Color], offsets: Array[float]) -> Texture2D:
 	t.fill_to = Vector2(1.0, 0.5)
 	t.width = 256
 	t.height = 256
-	return t
-
-
-func _make_font() -> Font:
-	var f := SystemFont.new()
-	f.font_names = PackedStringArray(["Georgia", "Garamond", "Times New Roman", "serif"])
-	return f
-
-
-## Ink-on-parchment buttons (the Begin Round button) and the serif font.
-func _make_theme() -> Theme:
-	var t := Theme.new()
-	t.default_font = _font
-	var normal := _box(PARCHMENT.lightened(0.2), 2, 0)
-	normal.content_margin_left = 18
-	normal.content_margin_right = 18
-	normal.content_margin_top = 6
-	normal.content_margin_bottom = 6
-	var hover := normal.duplicate() as StyleBoxFlat
-	hover.bg_color = PARCHMENT_DARK
-	var focus := normal.duplicate() as StyleBoxFlat
-	focus.bg_color = Color(0, 0, 0, 0)
-	focus.set_border_width_all(3)
-	focus.expand_margin_left = 4
-	focus.expand_margin_right = 4
-	focus.expand_margin_top = 4
-	focus.expand_margin_bottom = 4
-	var pressed := normal.duplicate() as StyleBoxFlat
-	pressed.bg_color = INK
-	t.set_stylebox("normal", "Button", normal)
-	t.set_stylebox("hover", "Button", hover)
-	t.set_stylebox("pressed", "Button", pressed)
-	t.set_stylebox("focus", "Button", focus)
-	for c in ["font_color", "font_hover_color", "font_focus_color"]:
-		t.set_color(c, "Button", INK)
-	t.set_color("font_pressed_color", "Button", PARCHMENT)
 	return t
 
 
@@ -816,13 +1461,27 @@ func _apply_debug_args() -> void:
 				var n := _find(id)
 				if n == null or not bool(_run.call("buy", n)):
 					push_warning("UpgradeTree: --dev-buy could not buy '%s'" % id)
-	for arg in args:
-		if arg.begins_with("--dev-focus="):
-			var n := _find(arg.trim_prefix("--dev-focus="))
-			if n != null and _is_shown(n):
-				(func() -> void: (_buttons[n.id] as Button).grab_focus()).call_deferred()
 	if not shot.is_empty():
 		_screenshot(shot, delay)
+
+
+## The view / focus flags, once the tree is laid out.
+func _apply_view_args() -> void:
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--dev-zoom="):
+			_zoom_at(float(arg.trim_prefix("--dev-zoom=")), _area().get_center())
+	for arg in OS.get_cmdline_user_args():
+		var focus_id := ""
+		if arg.begins_with("--dev-focus="):
+			focus_id = arg.trim_prefix("--dev-focus=")
+		elif arg.begins_with("--dev-hover="):
+			focus_id = arg.trim_prefix("--dev-hover=")
+		var n := _find(focus_id)
+		if n != null and _state.get(n.id, State.HIDDEN) != State.HIDDEN:
+			(func() -> void:
+				(_buttons[n.id] as Button).grab_focus()
+				if arg.begins_with("--dev-hover="):
+					_show_tip(n.id)).call_deferred()
 
 
 func _screenshot(path: String, delay: float) -> void:

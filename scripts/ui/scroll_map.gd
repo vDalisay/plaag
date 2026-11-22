@@ -5,12 +5,24 @@
 ## (Run.layout_of) with the houses of its best Round (Run.best_dead_houses)
 ## crossed out; an open, unvisited one a sketchy placeholder; a locked one is
 ## faint with a lock and "Unknown". Beaten Districts are hatched over in ink.
-## The header shows the Year, the wallet and "Choose where the plague goes next".
+## The header shows the Year, the wallet (UiIcons) and "Choose where the
+## plague goes next". The scroll unrolls when the screen opens (0.5 s; a fade
+## with Settings.reduce_motion).
+##
+## Hover / selection: the District under the mouse and the selected one lift
+## off the page (a drop shadow and a thicker ink wall); the selected one
+## carries a wax-seal ink marker. The card on the right shows its Warden, its
+## status ("Still holding out" / "Taken"), its best Round from Run.best_stats
+## (houses fallen, Infection, peak Colony; "—" when missing), what this Year
+## looks like there (YearTable: streets, Hygiene, the Year's townsfolk), a
+## "Newly opened" seal while an opened District is still unvisited, a one-row
+## legend and PromptHints for the controls.
 ##
 ## Input: click a District to select it, click it again (or Begin Round) to
 ## play it. Left / right (arrows, A / D, d-pad, stick) select, Enter / A
 ## begins, Esc / B goes back to the Upgrade Tree. Beginning sets
-## Run.current_district and calls Run.start_round().
+## Run.current_district and calls Run.start_round() (both go through the
+## Transition autoload via Run).
 ##
 ## Every Run call is duck typed (get_node_or_null("/root/Run")) so the scene
 ## opens without the autoload. Debug flags (after `--`): --screenshot=<path>
@@ -22,10 +34,11 @@
 ## {id: [[index, cx, cz, sx, sz, rot], ...]}, else a made-up grid).
 extends Control
 
-const PARCHMENT := Color(0.93, 0.88, 0.76)
-const PARCHMENT_DARK := Color(0.84, 0.77, 0.62)
-const INK := Color(0.13, 0.10, 0.08)
-const SEPIA := Color(0.36, 0.25, 0.15)
+const PARCHMENT := UiKit.PARCHMENT
+const PARCHMENT_DARK := UiKit.PARCHMENT_DARK
+const INK := UiKit.INK
+const SEPIA := UiKit.SEPIA
+## The table under the scroll and the rollers' handles (map-only art colours).
 const TABLE := Color(0.17, 0.11, 0.07)
 const WOOD := Color(0.33, 0.21, 0.11)
 ## District ground half-size (District.bounds is 44 x 44 u around the origin).
@@ -46,6 +59,12 @@ const MIN_SIZE := Vector2(720, 420)
 const YEAR_TABLE := "res://data/year_table.tres"
 ## What the streets look like at each YearTable visual_stage.
 const STAGE_TEXT: Array[String] = ["mud and refuse", "partly cobbled", "cobbled and lime-washed"]
+const UNROLL_TIME := 0.5
+## How far a hovered / selected District lifts off the page, in px.
+const LIFT_PX := 4.0
+## TownsfolkDef.look -> how the card names them.
+const LOOK_NAMES := {"plain": "peasants", "red": "red-cloaks", "broom": "brooms", "torch": "torches",
+	"club": "clubs", "guard": "Guards", "cat": "cats"}
 
 var _run: Node
 var _defs: Array = []              # DistrictDefs (or look-alikes), unlock order
@@ -65,18 +84,23 @@ var _wall_c := Vector2.ZERO
 var _wall_r := Vector2.ONE
 var _begin: Button
 var _back: Button
+var _hints: VBoxContainer
+var _unroll := 1.0
+var _lift: Array[float] = []
 
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	_run = get_node_or_null("/root/Run")
-	_font = _make_font(["Georgia", "Garamond", "Times New Roman", "serif"])
-	_title_font = _make_font(["Old English Text MT", "UnifrakturMaguntia", "Gabriola", "Georgia", "serif"])
+	_font = UiKit.body_font()
+	_title_font = UiKit.display_font()
 	_blot = _radial([Color(1, 1, 1, 1), Color(1, 1, 1, 0.45), Color(1, 1, 1, 0)], [0.0, 0.55, 1.0])
 	_vignette = _radial([Color(1, 1, 1, 0), Color(1, 1, 1, 0.12), Color(1, 1, 1, 1)], [0.0, 0.7, 1.42])
-	theme = _make_theme()
+	theme = UiKit.theme()
 	_defs = _load_defs()
+	for i in _defs.size():
+		_lift.append(0.0)
 	_build_buttons()
 	_apply_debug_args()
 	_selected = _start_index()
@@ -84,6 +108,30 @@ func _ready() -> void:
 	resized.connect(_layout)
 	if _run != null and _run.has_signal("wallet_changed"):
 		_run.connect("wallet_changed", queue_redraw)
+	_open_scroll()
+
+
+## The scroll unrolls from the middle (a fade with reduce_motion); the
+## buttons and hints fade in once it is open.
+func _open_scroll() -> void:
+	_set_chrome_alpha(0.0)
+	if UiKit.reduce_motion():
+		_unroll = 1.0
+		modulate.a = 0.0
+		var f := create_tween()
+		f.tween_property(self, "modulate:a", 1.0, 0.3)
+		f.parallel().tween_method(_set_chrome_alpha, 0.0, 1.0, 0.3)
+		return
+	_unroll = 0.0
+	var t := create_tween()
+	t.tween_property(self, "_unroll", 1.0, UNROLL_TIME).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	t.tween_method(_set_chrome_alpha, 0.0, 1.0, 0.15)
+
+
+func _set_chrome_alpha(a: float) -> void:
+	for c: Control in [_begin, _back, _hints]:
+		if c != null:
+			c.modulate.a = a
 
 
 func _process(delta: float) -> void:
@@ -92,6 +140,9 @@ func _process(delta: float) -> void:
 		_shake[id] = float(_shake[id]) - delta
 		if float(_shake[id]) <= 0.0:
 			_shake.erase(id)
+	for i in _lift.size():
+		var want := 1.0 if (i == _hover or i == _selected) else 0.0
+		_lift[i] = want if UiKit.reduce_motion() else move_toward(_lift[i], want, delta / 0.12)
 	queue_redraw()
 
 
@@ -212,6 +263,9 @@ func _go_back() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	var tr := get_node_or_null("/root/Transition")
+	if tr != null and tr.has_method("is_busy") and bool(tr.call("is_busy")):
+		return
 	var act := ""
 	if _pressed(event, ["ui_left", "move_left"]):
 		act = "left"
@@ -315,6 +369,8 @@ func _layout() -> void:
 	_begin.size = Vector2(bw, 40)
 	_back.position = Vector2(_panel.position.x + 24.0 + bw, _panel.end.y - 54.0)
 	_back.size = Vector2(bw, 40)
+	_hints.position = Vector2(_panel.position.x + 16.0, _panel.end.y - 54.0 - 62.0)
+	_hints.size = Vector2(_panel.size.x - 32.0, 56.0)
 	_update_buttons()
 	queue_redraw()
 
@@ -334,6 +390,31 @@ func _build_buttons() -> void:
 	_back.add_theme_font_size_override("font_size", 18)
 	_back.pressed.connect(_go_back)
 	add_child(_back)
+	# Narrower padding than the kit's so both fit side by side on the card.
+	for b: Button in [_begin, _back]:
+		for st in ["normal", "hover", "pressed", "disabled"]:
+			var box := theme.get_stylebox(st, "Button").duplicate() as StyleBoxFlat
+			box.content_margin_left = 6
+			box.content_margin_right = 6
+			b.add_theme_stylebox_override(st, box)
+	# Control hints (PromptHints follow the last device).
+	_hints = VBoxContainer.new()
+	_hints.name = "Hints"
+	_hints.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hints.add_theme_constant_override("separation", 6)
+	add_child(_hints)
+	var row1 := HBoxContainer.new()
+	row1.add_theme_constant_override("separation", 4)
+	row1.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hints.add_child(row1)
+	row1.add_child(PromptHint.make("ui_left", ""))
+	row1.add_child(PromptHint.make("ui_right", "Choose a District"))
+	var row2 := HBoxContainer.new()
+	row2.add_theme_constant_override("separation", 16)
+	row2.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hints.add_child(row2)
+	row2.add_child(PromptHint.make("ui_accept", "Begin"))
+	row2.add_child(PromptHint.make("ui_cancel", "To the Tree"))
 
 
 func _update_buttons() -> void:
@@ -357,24 +438,44 @@ func _draw() -> void:
 	_draw_compass(Vector2(_map.position.x + 46.0, _map.end.y - 50.0), 30.0)
 	_draw_scale_bar(Vector2(_map.end.x - 150.0, _map.end.y - 18.0))
 	_draw_panel()
-	_draw_rollers()
+	if _unroll < 1.0:
+		# Still unrolling: the table hides the rolled-up parts of the sheet.
+		var cy := _paper.get_center().y
+		var hh := (_paper.size.y * 0.5) * clampf(_unroll, 0.0, 1.0)
+		_draw_table(Rect2(0, 0, size.x, cy - hh))
+		_draw_table(Rect2(0, cy + hh, size.x, size.y - cy - hh))
+		_draw_roller(cy - hh)
+		_draw_roller(cy + hh)
+	else:
+		_draw_rollers()
 
 
-func _draw_table() -> void:
-	draw_rect(Rect2(Vector2.ZERO, size), TABLE)
+## The wooden table, or only the part of it inside `clip` (while unrolling).
+func _draw_table(clip := Rect2()) -> void:
+	var full := Rect2(Vector2.ZERO, size)
+	var area := full if not clip.has_area() else clip.intersection(full)
+	if not area.has_area():
+		return
+	draw_rect(area, TABLE)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 7
 	# Wood grain: long faint wavy lines.
 	for i in 46:
 		var y := rng.randf() * size.y
-		var pts := PackedVector2Array()
 		var ph := rng.randf() * TAU
 		var amp := rng.randf_range(1.0, 5.0)
+		var col := Color(0, 0, 0, rng.randf_range(0.10, 0.28))
+		var width := rng.randf_range(1.0, 2.5)
+		if y < area.position.y - 8.0 or y > area.end.y + 8.0:
+			continue
+		var pts := PackedVector2Array()
 		for k in 33:
 			var x := float(k) / 32.0 * size.x
-			pts.append(Vector2(x, y + sin(x * 0.006 + ph) * amp + sin(x * 0.031 + ph) * 1.2))
-		draw_polyline(pts, Color(0, 0, 0, rng.randf_range(0.10, 0.28)), rng.randf_range(1.0, 2.5), true)
-	draw_texture_rect(_vignette, Rect2(Vector2.ZERO, size), false, Color(0, 0, 0, 0.6))
+			var py := clampf(y + sin(x * 0.006 + ph) * amp + sin(x * 0.031 + ph) * 1.2, area.position.y, area.end.y)
+			pts.append(Vector2(x, py))
+		draw_polyline(pts, col, width, true)
+	var uv := Rect2(area.position / size * 256.0, area.size / size * 256.0)
+	draw_texture_rect_region(_vignette, area, uv, Color(0, 0, 0, 0.6))
 
 
 func _draw_paper() -> void:
@@ -472,9 +573,19 @@ func _draw_header() -> void:
 	_text_centered(_title_font, 34, Vector2(_paper.get_center().x, y), title, INK)
 	var w := _wallet()
 	_text_left(_font, 19, Vector2(_paper.position.x + 34.0, y - 4.0), "Year of Our Lord %d" % _year(), INK)
-	var wallet := "Pestilence  %d     Bones  %d" % [w.x, w.y]
-	var ws := _font.get_string_size(wallet, HORIZONTAL_ALIGNMENT_LEFT, -1, 19)
-	_text_left(_font, 19, Vector2(_paper.end.x - 34.0 - ws.x, y - 4.0), wallet, INK)
+	# Wallet, right-aligned: "54 (drop)   24 (bones)".
+	var fs := UiKit.SIZE_LARGE
+	var p_txt := str(w.x) if _run != null else "—"
+	var b_txt := str(w.y) if _run != null else "—"
+	var icon := 24.0
+	var bw := _font.get_string_size(b_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	var pw := _font.get_string_size(p_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	var x := _paper.end.x - 34.0 - icon - 6.0 - bw
+	_text_left(_font, fs, Vector2(x, y - 2.0), b_txt, INK)
+	UiIcons.draw(self, "bones", Vector2(x + bw + 6.0 + icon * 0.5, y - 10.0), icon)
+	x -= 22.0 + icon + 6.0 + pw
+	_text_left(_font, fs, Vector2(x, y - 2.0), p_txt, INK)
+	UiIcons.draw(self, "pestilence", Vector2(x + pw + 6.0 + icon * 0.5, y - 10.0), icon)
 	# A flourished rule under the header.
 	var ry := y + 16.0
 	var cx := _paper.get_center().x
@@ -686,8 +797,8 @@ func _region_center(i: int) -> Vector2:
 	return (_regions[i]["xf"] as Transform2D).origin
 
 
-## One District quarter: ground, contents, hatching when beaten, wall, label,
-## selection ring.
+## One District quarter: its lift shadow, ground, contents, hatching when
+## beaten, wall, label and (when selected) the wax seal.
 func _draw_region(i: int) -> void:
 	var r := _regions[i]
 	var xf: Transform2D = r["xf"]
@@ -701,6 +812,17 @@ func _draw_region(i: int) -> void:
 	var beaten := _is_beaten(i)
 	var layout := _layout_of(i)
 	var alpha := 1.0 if open else LOCKED_ALPHA
+	var lift := _lift[i] if i < _lift.size() else 0.0
+	if lift > 0.0:
+		# Lifted off the page: a soft shadow where it lay, the quarter raised.
+		var shadow := xf * _octagon(half + 0.6, 4.0)
+		for k in 3:
+			var off := Vector2(2.0 + k, 3.0 + k * 1.5) * lift
+			var sh := PackedVector2Array()
+			for q in shadow:
+				sh.append(q + off)
+			draw_colored_polygon(sh, Color(INK, 0.09 * lift))
+		xf.origin += Vector2(0, -LIFT_PX * lift)
 	var shape := xf * _octagon(half, 4.0)
 	draw_colored_polygon(shape, Color(PARCHMENT.lightened(0.14), 0.92 if open else 0.75))
 	if not open:
@@ -718,7 +840,7 @@ func _draw_region(i: int) -> void:
 		_draw_crosses(xf, layout, _dead_houses(i))
 	# Quarter wall, drawn twice for the double ink line.
 	var line := Color(INK, alpha)
-	_wobbly_poly(shape, line, 2.4 if open else 1.4, i * 7 + 1)
+	_wobbly_poly(shape, line, (2.4 if open else 1.4) + 1.8 * lift, i * 7 + 1)
 	if open:
 		_wobbly_poly(xf * _octagon(half + 1.0, 4.4), Color(INK, 0.35), 1.0, i * 7 + 2)
 	# Corner towers.
@@ -736,13 +858,30 @@ func _draw_region(i: int) -> void:
 	_text_centered(_title_font, fs, label_at, title, Color(INK, alpha if open else 0.55))
 	if beaten:
 		_text_centered(_font, 13, xf * Vector2(0, half) + Vector2(0, 16.0), "— taken —", Color(INK, 0.8))
-	# Selection: a dashed ring that breathes, and a hand pointing at it.
-	if i == _selected or i == _hover:
-		var pulse := 0.55 + 0.35 * sin(_time * 3.0) if i == _selected else 0.35
-		_dashed_poly(xf * _octagon(half + 3.2, 5.0), Color(INK, pulse), 2.0, 9.0)
+	# Selected: underlined, and a wax seal pressed on its corner.
 	if i == _selected:
 		var u := label_at + Vector2(0, 8.0)
 		_wobbly_line(u - Vector2(tw * 0.5, 0), u + Vector2(tw * 0.5, 0), INK, 1.6, i + 90)
+		_draw_seal(xf * Vector2(half - 1.0, half - 3.0), 17.0, i)
+
+
+## A wax-seal-style ink marker: a lumpy disc of ink, a pressed ring and a rat,
+## with two ribbon tails.
+func _draw_seal(c: Vector2, r: float, seed_value: int) -> void:
+	var ph := float(seed_value) * 1.3
+	for side: float in [-1.0, 1.0]:
+		var base := c + Vector2(side * r * 0.35, r * 0.6)
+		draw_colored_polygon(PackedVector2Array([base + Vector2(-5, 0), base + Vector2(5, 0),
+			base + Vector2(side * 9.0 + 4.0, r * 1.05), base + Vector2(side * 6.0, r * 0.82), base + Vector2(side * 9.0 - 4.0, r * 1.05)]), Color(INK, 0.85))
+	draw_circle(c + Vector2(1.5, 2.5), r * 1.05, Color(INK, 0.25))
+	var blob := PackedVector2Array()
+	for k in 28:
+		var a := TAU * float(k) / 28.0
+		var rr := r * (1.0 + 0.07 * sin(a * 7.0 + ph) + 0.04 * sin(a * 13.0 + ph * 2.0))
+		blob.append(c + Vector2(cos(a), sin(a)) * rr)
+	draw_colored_polygon(blob, INK)
+	draw_arc(c, r * 0.72, 0.0, TAU, 32, Color(PARCHMENT, 0.45), 1.4, true)
+	UiIcons.draw(self, "rat", c + Vector2(0, 1), r * 1.05, Color(PARCHMENT, 0.9))
 
 
 func _octagon(h: float, c: float) -> PackedVector2Array:
@@ -904,8 +1043,9 @@ func _clip_convex(a: Vector2, b: Vector2, poly: PackedVector2Array) -> PackedVec
 	return PackedVector2Array([a + d * t0, a + d * t1])
 
 
-## The selected District's card: title, Exterminator, state, fallen houses,
-## a legend and the buttons.
+## The selected District's card: title, Warden, status, best Round, this
+## Year there, a "Newly opened" seal, a one-row legend (the hints and buttons
+## are Controls below it).
 func _draw_panel() -> void:
 	var p := _panel
 	draw_rect(p, Color(PARCHMENT.lightened(0.1), 0.6))
@@ -926,61 +1066,147 @@ func _draw_panel() -> void:
 	y += 14.0
 	_wobbly_line(Vector2(x + 20.0, y), Vector2(p.end.x - 38.0, y), Color(INK, 0.6), 1.2, 31)
 	_diamond(Vector2(cx, y), 3.5, INK)
-	y += 30.0
-	var lines: Array[String] = []
+	y += 28.0
+	var fs := 16
+	var lh := 22.0
 	if not open:
 		var req := str(_defs[i].get("requires"))
 		var req_title := req
 		for k in _defs.size():
 			if _id(k) == req:
 				req_title = str(_defs[k].get("title"))
-		lines.append("Locked. Its gates open once")
-		lines.append("%s is taken." % req_title)
+		_text_left(_font, fs, Vector2(x, y), "Locked. Its gates open once", INK)
+		_text_left(_font, fs, Vector2(x, y + lh), "%s is taken." % req_title, INK)
+		_draw_legend(Vector2(x, _hints.position.y - 30.0))
+		return
+	_text_left(_font, fs, Vector2(x, y), "Warden: %s" % str(_defs[i].get("exterminator_title")), INK)
+	y += lh
+	_text_left(_title_font, 22, Vector2(x, y + 2.0), "Taken" if beaten else "Still holding out", INK)
+	y += lh + 6.0
+	if _is_new(i):
+		_draw_stamp(Vector2(p.end.x - 70.0, y - lh - 10.0), "Newly opened")
+	# Best Round (Run.best_stats, else the crossed-out houses alone).
+	_text_left(_font, 14, Vector2(x, y), "Best Round", SEPIA)
+	y += lh - 2.0
+	var best := _best_stats(i)
+	if layout.is_empty() and best.is_empty():
+		_text_left(_font, fs, Vector2(x, y), "Not yet visited.", INK)
+		y += lh
 	else:
-		lines.append("Warden: %s" % str(_defs[i].get("exterminator_title")))
-		if beaten:
-			lines.append("Taken: the Warden has fallen.")
-		elif layout.is_empty():
-			lines.append("Not yet visited.")
-		else:
-			lines.append("Still holding out.")
-		if not layout.is_empty():
-			var dead := _dead_houses(i).size()
-			lines.append("Houses fallen: %d of %d" % [dead, layout.size()])
-		lines.append("Townsfolk: about %d abroad" % int(_defs[i].get("wanderers")))
-		var stage := _visual_stage(i)
-		if stage >= 0:
-			lines.append("Streets: %s" % STAGE_TEXT[clampi(stage, 0, STAGE_TEXT.size() - 1)])
-	for l in lines:
-		_text_left(_font, 17, Vector2(x, y), l, INK)
-		y += 25.0
-	# Legend.
-	y = maxf(y + 12.0, p.end.y - 190.0)
-	_text_left(_font, 14, Vector2(x, y), "Legend", SEPIA)
-	y += 12.0
-	var lx := x + 4.0
-	var house := Transform2D(0.0, Vector2(lx + 12.0, y + 12.0))
-	var entry := [{"index": 0, "center": Vector2.ZERO, "size": Vector2(20, 13), "rot": 0.0}]
-	_draw_houses(house, entry)
-	_text_left(_font, 14, Vector2(lx + 34.0, y + 17.0), "a house", INK)
-	y += 28.0
-	house = Transform2D(0.0, Vector2(lx + 12.0, y + 12.0))
-	_draw_houses(house, entry)
-	_draw_crosses(house, entry, [0])
-	_text_left(_font, 14, Vector2(lx + 34.0, y + 17.0), "died in your best Round", INK)
-	y += 28.0
-	var sw := PackedVector2Array([Vector2(-10, -7), Vector2(10, -7), Vector2(10, 7), Vector2(-10, 7)])
-	var swx := Transform2D(0.0, Vector2(lx + 12.0, y + 12.0))
+		var houses: Variant = best.get("houses_fallen", _dead_houses(i).size() if not layout.is_empty() else null)
+		var of_total := " of %d" % layout.size() if not layout.is_empty() else ""
+		_text_left(_font, fs, Vector2(x, y), "Houses fallen: %s%s" % [_or_dash(houses), of_total], INK)
+		y += lh
+		var inf: Variant = best.get("infection")
+		var inf_txt := "—"
+		if inf != null:
+			var f := float(inf)
+			inf_txt = "%d%%" % roundi(f * 100.0 if f <= 1.0 else f)
+		_text_left(_font, fs, Vector2(x, y), "Infection: %s" % inf_txt, INK)
+		y += lh
+		_text_left(_font, fs, Vector2(x, y), "Peak Colony: %s" % _or_dash(best.get("peak_colony")), INK)
+		y += lh
+	# This Year there.
+	y += 4.0
+	_text_left(_font, 14, Vector2(x, y), "In %d" % _year(), SEPIA)
+	y += lh - 2.0
+	for line in _year_lines(i):
+		if y > _hints.position.y - 44.0:
+			break
+		_text_left(_font, fs, Vector2(x, y), line, INK)
+		y += lh
+	_draw_legend(Vector2(x, _hints.position.y - 30.0))
+
+
+## One row: a house, a fallen house, a taken District.
+func _draw_legend(at: Vector2) -> void:
+	_wobbly_line(Vector2(at.x, at.y - 4.0), Vector2(_panel.end.x - 18.0, at.y - 4.0), Color(INK, 0.35), 1.0, 41)
+	var y := at.y + 12.0
+	var entry := [{"index": 0, "center": Vector2.ZERO, "size": Vector2(16, 11), "rot": 0.0}]
+	var x := at.x + 8.0
+	_draw_houses(Transform2D(0.0, Vector2(x, y)), entry)
+	_text_left(_font, 14, Vector2(x + 13.0, y + 5.0), "house", INK)
+	x += 70.0
+	var h := Transform2D(0.0, Vector2(x, y))
+	_draw_houses(h, entry)
+	_draw_crosses(h, entry, [0])
+	_text_left(_font, 14, Vector2(x + 13.0, y + 5.0), "fallen", INK)
+	x += 72.0
+	var sw := PackedVector2Array([Vector2(-8, -6), Vector2(8, -6), Vector2(8, 6), Vector2(-8, 6)])
+	var swx := Transform2D(0.0, Vector2(x, y))
 	draw_colored_polygon(swx * sw, PARCHMENT.lightened(0.14))
-	_hatch(swx, sw, 1.0, 0.785, 4.0, Color(INK, 0.62), 1.0, 3)
-	_hatch(swx, sw, 1.0, -0.785, 7.0, Color(INK, 0.4), 1.0, 4)
+	_hatch(swx, sw, 1.0, 0.785, 3.5, Color(INK, 0.62), 1.0, 3)
 	var closed := swx * sw
 	closed.append(closed[0])
 	draw_polyline(closed, INK, 1.2)
-	_text_left(_font, 14, Vector2(lx + 34.0, y + 17.0), "a District taken", INK)
-	y += 30.0
-	_text_left(_font, 12, Vector2(x, y + 6.0), "Click: select, again to begin.  ← →: select", SEPIA)
-	_text_left(_font, 12, Vector2(x, y + 22.0), "Enter / A: begin.   Esc / B: the Tree", SEPIA)
+	_text_left(_font, 14, Vector2(x + 13.0, y + 5.0), "taken", INK)
+
+
+## An ink stamp, slightly askew, with a double border.
+func _draw_stamp(c: Vector2, text: String) -> void:
+	var fs := 15
+	var w := _title_font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x + 18.0
+	draw_set_transform(c, -0.12)
+	var r := Rect2(Vector2(-w * 0.5, -13.0), Vector2(w, 26.0))
+	draw_rect(r, Color(PARCHMENT.lightened(0.15), 0.9))
+	draw_rect(r, Color(INK, 0.85), false, 2.0)
+	draw_rect(r.grow(-3.0), Color(INK, 0.6), false, 1.0)
+	_text_centered(_title_font, fs, Vector2(0, 5.0), text, INK)
+	draw_set_transform(Vector2.ZERO)
+
+
+## Open, not beaten, never visited, and opened by beating another District.
+func _is_new(i: int) -> bool:
+	return _is_open(i) and not _is_beaten(i) and _layout_of(i).is_empty() 		and not str(_defs[i].get("requires")).is_empty()
+
+
+func _best_stats(i: int) -> Dictionary:
+	if _run == null:
+		return {}
+	var all: Variant = _run.get("best_stats")
+	if all is Dictionary and (all as Dictionary).get(_id(i)) is Dictionary:
+		return (all as Dictionary)[_id(i)]
+	return {}
+
+
+func _or_dash(v: Variant) -> String:
+	return "—" if v == null else str(int(v))
+
+
+## What this Year looks like in District i, from the YearTable: the streets,
+## the Hygiene and the townsfolk about.
+func _year_lines(i: int) -> Array[String]:
+	var out: Array[String] = []
+	var e := _year_entry(i)
+	var stage := _visual_stage(i)
+	if stage >= 0:
+		out.append("Streets: %s" % STAGE_TEXT[clampi(stage, 0, STAGE_TEXT.size() - 1)])
+	if e != null:
+		var hy := float(e.get("hygiene"))
+		if hy > 0.0:
+			out.append("Hygiene: Infection gains −%d%%" % roundi(hy * 100.0))
+		var types: Variant = e.get("types")
+		if types is Array:
+			var names: Array[String] = []
+			for t: Variant in types:
+				if t is Object:
+					var look := str((t as Object).get("look"))
+					var n := str(LOOK_NAMES.get(look, look))
+					if not names.has(n):
+						names.append(n)
+			if not names.is_empty():
+				out.append("Abroad: " + ", ".join(names.slice(0, 3)))
+	out.append("Townsfolk: about %d" % int(_defs[i].get("wanderers")))
+	return out
+
+
+func _year_entry(i: int) -> Object:
+	if not ResourceLoader.exists(YEAR_TABLE):
+		return null
+	var table := load(YEAR_TABLE)
+	if table == null or not table.has_method("entry_for"):
+		return null
+	return table.call("entry_for", _year(), _id(i)) as Object
 
 
 func _draw_compass(c: Vector2, r: float) -> void:
@@ -1098,12 +1324,6 @@ func _text_centered(f: Font, fs: int, at: Vector2, s: String, col: Color) -> voi
 	draw_string(f, Vector2(at.x - w * 0.5, at.y), s, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
 
 
-func _make_font(names: Array[String]) -> Font:
-	var f := SystemFont.new()
-	f.font_names = PackedStringArray(names)
-	return f
-
-
 ## A radial gradient texture (centre to corner) in white, tinted when drawn.
 func _radial(colors: Array[Color], offsets: Array[float]) -> Texture2D:
 	var g := Gradient.new()
@@ -1116,39 +1336,6 @@ func _radial(colors: Array[Color], offsets: Array[float]) -> Texture2D:
 	t.fill_to = Vector2(1.0, 0.5)
 	t.width = 256
 	t.height = 256
-	return t
-
-
-func _box(fill: Color, border: int) -> StyleBoxFlat:
-	var s := StyleBoxFlat.new()
-	s.bg_color = fill
-	s.border_color = INK
-	s.set_border_width_all(border)
-	s.content_margin_left = 12
-	s.content_margin_right = 12
-	s.content_margin_top = 4
-	s.content_margin_bottom = 4
-	return s
-
-
-## Ink-on-parchment buttons and the serif font (as on the Upgrade Tree).
-func _make_theme() -> Theme:
-	var t := Theme.new()
-	t.default_font = _font
-	var normal := _box(PARCHMENT.lightened(0.2), 2)
-	var hover := _box(PARCHMENT_DARK, 2)
-	var pressed := _box(INK, 2)
-	var disabled := _box(Color(PARCHMENT, 0.5), 1)
-	disabled.border_color = Color(INK, 0.35)
-	t.set_stylebox("normal", "Button", normal)
-	t.set_stylebox("hover", "Button", hover)
-	t.set_stylebox("pressed", "Button", pressed)
-	t.set_stylebox("disabled", "Button", disabled)
-	t.set_stylebox("focus", "Button", StyleBoxEmpty.new())
-	for c in ["font_color", "font_hover_color", "font_focus_color"]:
-		t.set_color(c, "Button", INK)
-	t.set_color("font_pressed_color", "Button", PARCHMENT)
-	t.set_color("font_disabled_color", "Button", Color(INK, 0.4))
 	return t
 
 

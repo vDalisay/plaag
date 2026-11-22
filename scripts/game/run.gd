@@ -11,6 +11,11 @@
 ## M7: open_map() goes to the Scroll Map; each District stores its house
 ## layout (store_layout / layout_of) so the map can draw it. --dev also turns
 ## on Fleas and Contagion.
+## UX pass: open_tree(), open_map() and start_round() go through the Transition
+## autoload (ink blot) when it exists; best_stats keeps the best Round per
+## District (most houses fallen, with its Infection and peak Colony), saved;
+## year_preview() lists what changes between two Years (results screen);
+## has_save() tells the title screen whether there is a Run to continue.
 extends Node
 
 signal wallet_changed
@@ -24,6 +29,19 @@ const START_DISTRICT := "slums"
 const DISTRICT_SCENE := "res://scenes/game/district.tscn"
 const TREE_SCENE := "res://scenes/ui/upgrade_tree.tscn"
 const MAP_SCENE := "res://scenes/ui/scroll_map.tscn"
+const YEAR_TABLE := "res://data/year_table.tres"
+## What a new townsfolk type looks like in the results screen's Year block.
+const TYPE_NEWS := {
+	"broom": "Townsfolk now carry brooms",
+	"cat": "Cats prowl the streets",
+	"torch_guard": "Guards with torches walk the streets",
+	"club": "Townsfolk now carry clubs",
+	"club_guard": "Guards with clubs keep watch",
+}
+## The Year visual stage (YearEntry.visual_stage) reached, as news.
+const STAGE_NEWS := ["", "Cobbles are being laid", "Walls are lime-washed and the wells run clean"]
+## year_preview() lists at most this many changes.
+const PREVIEW_LINES := 4
 const BASE_STATS := {
 	"rat_speed": 6.0, "bite_range": 1.6, "bite_cooldown": 1.2, "bite_chunk": 3.0,
 	"bite_rate_bonus": 0.5, "start_adults": 0.0, "feed_time": 1.5, "pup_maturity": 15.0,
@@ -60,6 +78,9 @@ var best_dead_houses := {}
 ## District id -> Array of {index: int, center: Vector2, size: Vector2,
 ## rot: float}: the house footprints of its layout (see store_layout()).
 var layouts := {}
+## District id -> {houses_fallen: int, infection: float (0..1), peak_colony: int}:
+## the Round there with the most houses fallen (see record_best()).
+var best_stats := {}
 ## Where the Run is saved; tests point this somewhere else.
 var save_path := SAVE_PATH
 ## True with --dev (developer shortcuts such as R to restart a Round).
@@ -200,6 +221,9 @@ func finish_round(result: Dictionary) -> void:
 		for i: Variant in dead:
 			ids.append(int(i))
 		_record_dead_houses(current_district, ids)
+	var stats: Variant = result.get("stats")
+	if stats is Dictionary:
+		_record_best(current_district, stats)
 	if reason == "exterminator_beaten":
 		_beat(current_district)
 	last_colony_size = maxi(0, int(result.get("colony_size", 0)))
@@ -209,8 +233,18 @@ func finish_round(result: Dictionary) -> void:
 
 
 func start_round() -> void:
+	go(DISTRICT_SCENE)
+
+
+## Changes scene through the Transition autoload when it exists (an ink blot),
+## else straight away. Unpauses the tree either way.
+func go(path: String) -> void:
 	get_tree().paused = false
-	get_tree().change_scene_to_file(DISTRICT_SCENE)
+	var t := get_node_or_null("/root/Transition")
+	if t != null and t.has_method("go"):
+		t.call("go", path)
+	else:
+		get_tree().change_scene_to_file(path)
 
 
 ## The Scroll Map, where the player picks the next District (falls back to
@@ -221,7 +255,7 @@ func open_map() -> void:
 		push_warning("Run: %s missing, starting the next Round instead" % MAP_SCENE)
 		start_round()
 		return
-	get_tree().change_scene_to_file(MAP_SCENE)
+	go(MAP_SCENE)
 
 
 func open_tree() -> void:
@@ -230,7 +264,67 @@ func open_tree() -> void:
 		push_warning("Run: %s missing, starting the next Round instead" % TREE_SCENE)
 		start_round()
 		return
-	get_tree().change_scene_to_file(TREE_SCENE)
+	go(TREE_SCENE)
+
+
+# ---------------------------------------------------------------------- results
+## True when `stats` (RoundDirector result["stats"]) beats the District's best
+## Round: more houses fallen than before (the first Round counts with any).
+func is_best_round(district_id: String, stats: Dictionary) -> bool:
+	var houses := int(stats.get("houses_fallen", 0))
+	if not best_stats.has(district_id):
+		return houses > 0
+	return houses > int((best_stats[district_id] as Dictionary).get("houses_fallen", 0))
+
+
+## Keeps the Round with the most houses fallen in this District (saved by the caller).
+func _record_best(district_id: String, stats: Dictionary) -> void:
+	if best_stats.has(district_id) and not is_best_round(district_id, stats):
+		return
+	best_stats[district_id] = {
+		"houses_fallen": int(stats.get("houses_fallen", 0)),
+		"infection": float(stats.get("infection", 0.0)),
+		"peak_colony": int(stats.get("peak_colony", 0)),
+	}
+
+
+## What changes in `district_id` between Year `from` and Year `to`, from the
+## YearTable rows (at most PREVIEW_LINES): new townsfolk types, Hygiene up,
+## a warier start Vigilance, the next visual stage. [] when nothing changes.
+func year_preview(from: int, to: int, district_id: String) -> Array[String]:
+	var out: Array[String] = []
+	if not ResourceLoader.exists(YEAR_TABLE):
+		return out
+	var table := load(YEAR_TABLE) as YearTable
+	if table == null:
+		return out
+	var a := table.entry_for(from, district_id)
+	var b := table.entry_for(to, district_id)
+	if a == null or b == null or a == b:
+		return out
+	var had := {}
+	for t: TownsfolkDef in a.types:
+		if t != null:
+			had[t.id] = true
+	for t: TownsfolkDef in b.types:
+		if t != null and not had.has(t.id):
+			out.append(str(TYPE_NEWS.get(t.id, "New townsfolk walk the streets")))
+	if b.hygiene > a.hygiene + 0.001:
+		out.append("Wells are cleaner: Infection gains −%d%%" % roundi((b.hygiene - a.hygiene) * 100.0))
+	if b.start_vigilance > a.start_vigilance + 0.001:
+		out.append("The watch is warier: Rounds start more Vigilant")
+	if b.windup_mult < a.windup_mult - 0.001:
+		out.append("Townsfolk strike faster")
+	if b.visual_stage > a.visual_stage and b.visual_stage < STAGE_NEWS.size():
+		out.append(STAGE_NEWS[b.visual_stage])
+	if out.size() > PREVIEW_LINES:
+		out.resize(PREVIEW_LINES)
+	return out
+
+
+## True when a saved Run exists (the title screen's Continue).
+func has_save() -> bool:
+	return FileAccess.file_exists(save_path)
 
 
 # ---------------------------------------------------------------------- districts
@@ -448,6 +542,8 @@ func save_run() -> void:
 		cfg.set_value("best_dead_houses", id, best_dead_houses[id])
 	for id: String in layouts:
 		cfg.set_value("layouts", id, layouts[id])
+	for id: String in best_stats:
+		cfg.set_value("best_stats", id, best_stats[id])
 	var err := cfg.save(save_path)
 	if err != OK:
 		push_warning("Run: could not save %s (error %d)" % [save_path, err])
@@ -481,6 +577,11 @@ func load_run() -> void:
 				var arr: Variant = cfg.get_value("layouts", id, [])
 				if arr is Array:
 					layouts[id] = _clean_layout(arr)
+		if cfg.has_section("best_stats"):
+			for id in cfg.get_section_keys("best_stats"):
+				var b: Variant = cfg.get_value("best_stats", id, {})
+				if b is Dictionary:
+					_record_best(id, b)
 		if cfg.has_section("levels"):
 			for id in cfg.get_section_keys("levels"):
 				var lv := int(cfg.get_value("levels", id, 0))
@@ -510,3 +611,4 @@ func _set_defaults() -> void:
 	beaten = {}
 	best_dead_houses = {}
 	layouts = {}
+	best_stats = {}
