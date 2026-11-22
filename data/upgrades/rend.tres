@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="UpgradeNodeDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/upgrade_node_def.gd" id="1_3x733"]
+
+[resource]
+script = ExtResource("1_3x733")
+id = "rend"
+title = "Rend"
+description = "Tear, don't nip. Each Bite carries more Infection."
+max_level = 3
+cost_pestilence = 8
+cost_bones = 3
+requires = Array[String](["long_teeth"])
+effects = {
+"bite_chunk": 1.0
+}
+tree_position = Vector2(3.3, 0.8)

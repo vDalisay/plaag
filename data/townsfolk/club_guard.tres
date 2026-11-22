@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="TownsfolkDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/townsfolk_def.gd" id="1_cg"]
+[ext_resource type="Resource" path="res://data/weapons/club.tres" id="2_club"]
+
+[resource]
+script = ExtResource("1_cg")
+id = "club_guard"
+look = "guard"
+weapon = ExtResource("2_club")
+walk_speed = 1.6
+hp_note = "never flees; heavy club"
+tier = 3
+base_weight = 0.45
+always_fight = true
+gain_multiplier = 0.8

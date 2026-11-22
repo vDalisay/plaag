@@ -1,0 +1,31 @@
+[gd_scene load_steps=7 format=3]
+
+[ext_resource type="Script" path="res://scripts/game/townsperson.gd" id="1_person"]
+[ext_resource type="Script" path="res://scripts/components/infection_component.gd" id="2_infection"]
+[ext_resource type="Script" path="res://scripts/components/fear_component.gd" id="3_fear"]
+[ext_resource type="Script" path="res://scripts/components/weapon_component.gd" id="4_weapon"]
+[ext_resource type="Resource" path="res://data/weapons/stomp.tres" id="5_stomp"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_person"]
+radius = 0.45
+height = 2.2
+
+[node name="Townsperson" type="CharacterBody3D" groups=["townsfolk"]]
+collision_layer = 4
+collision_mask = 5
+motion_mode = 1
+script = ExtResource("1_person")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.1, 0)
+shape = SubResource("CapsuleShape3D_person")
+
+[node name="Infection" type="Node" parent="."]
+script = ExtResource("2_infection")
+
+[node name="Fear" type="Node" parent="."]
+script = ExtResource("3_fear")
+
+[node name="Weapon" type="Node3D" parent="."]
+script = ExtResource("4_weapon")
+weapon = ExtResource("5_stomp")

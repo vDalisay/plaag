@@ -1,0 +1,19 @@
+[gd_resource type="Resource" script_class="UpgradeNodeDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/upgrade_node_def.gd" id="1_rking"]
+
+[resource]
+script = ExtResource("1_rking")
+id = "rat_king"
+title = "Rat King"
+description = "Tails knotted together, the pack moves as one. More Adults go on each Raid, and Raids come round sooner."
+max_level = 2
+cost_pestilence = 8
+cost_bones = 4
+cost_growth = 1.6
+requires = Array[String](["raid"])
+effects = {
+"raid_size": 1.0,
+"raid_cooldown": -1.5
+}
+tree_position = Vector2(0.0, 3.6)

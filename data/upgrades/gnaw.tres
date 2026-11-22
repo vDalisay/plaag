@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="UpgradeNodeDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/upgrade_node_def.gd" id="1_hrag5"]
+
+[resource]
+script = ExtResource("1_hrag5")
+id = "gnaw"
+title = "Gnaw"
+description = "Sharper incisors. The Colony Bites again sooner."
+max_level = 3
+cost_pestilence = 2
+effects = {
+"bite_cooldown": -0.1
+}

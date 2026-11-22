@@ -1,0 +1,94 @@
+[gd_resource type="Resource" script_class="YearTable" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/year_entry.gd" id="1_yi2pg"]
+[ext_resource type="Script" path="res://scripts/data/townsfolk_def.gd" id="2_r1j23"]
+[ext_resource type="Resource" path="res://data/townsfolk/plain.tres" id="3_t4tao"]
+[ext_resource type="Resource" path="res://data/townsfolk/broom.tres" id="4_7xhcx"]
+[ext_resource type="Resource" path="res://data/townsfolk/cat.tres" id="5_epjog"]
+[ext_resource type="Resource" path="res://data/townsfolk/torch_guard.tres" id="6_ufgkh"]
+[ext_resource type="Resource" path="res://data/townsfolk/club.tres" id="7_iikt3"]
+[ext_resource type="Script" path="res://scripts/data/year_table.gd" id="8_y1fxl"]
+[ext_resource type="Resource" path="res://data/townsfolk/club_guard.tres" id="9_cguard"]
+
+[sub_resource type="Resource" id="Resource_q1mc6"]
+script = ExtResource("1_yi2pg")
+types = Array[ExtResource("2_r1j23")]([ExtResource("3_t4tao")])
+
+[sub_resource type="Resource" id="Resource_1ct5d"]
+script = ExtResource("1_yi2pg")
+from_year = 1348
+types = Array[ExtResource("2_r1j23")]([ExtResource("3_t4tao"), ExtResource("4_7xhcx")])
+
+[sub_resource type="Resource" id="Resource_umhmv"]
+script = ExtResource("1_yi2pg")
+from_year = 1349
+types = Array[ExtResource("2_r1j23")]([ExtResource("3_t4tao"), ExtResource("4_7xhcx"), ExtResource("5_epjog")])
+hygiene = 0.05
+speed_mult = 1.05
+start_vigilance = 0.1
+
+[sub_resource type="Resource" id="Resource_rs6md"]
+script = ExtResource("1_yi2pg")
+from_year = 1351
+types = Array[ExtResource("2_r1j23")]([ExtResource("3_t4tao"), ExtResource("4_7xhcx"), ExtResource("5_epjog")])
+hygiene = 0.12
+speed_mult = 1.1
+windup_mult = 0.9
+start_vigilance = 0.2
+visual_stage = 1
+
+[sub_resource type="Resource" id="Resource_youbw"]
+script = ExtResource("1_yi2pg")
+from_year = 1353
+types = Array[ExtResource("2_r1j23")]([ExtResource("3_t4tao"), ExtResource("4_7xhcx"), ExtResource("5_epjog"), ExtResource("6_ufgkh")])
+hygiene = 0.2
+speed_mult = 1.1
+windup_mult = 0.85
+start_vigilance = 0.35
+visual_stage = 1
+
+[sub_resource type="Resource" id="Resource_ys4oe"]
+script = ExtResource("1_yi2pg")
+from_year = 1356
+types = Array[ExtResource("2_r1j23")]([ExtResource("3_t4tao"), ExtResource("4_7xhcx"), ExtResource("5_epjog"), ExtResource("6_ufgkh"), ExtResource("7_iikt3")])
+hygiene = 0.3
+speed_mult = 1.1
+windup_mult = 0.85
+start_vigilance = 0.5
+visual_stage = 2
+
+[sub_resource type="Resource" id="Resource_m1347"]
+script = ExtResource("1_yi2pg")
+district_id = "merchant"
+types = Array[ExtResource("2_r1j23")]([ExtResource("3_t4tao"), ExtResource("4_7xhcx"), ExtResource("6_ufgkh"), ExtResource("9_cguard")])
+hygiene = 0.25
+speed_mult = 1.1
+windup_mult = 0.9
+start_vigilance = 0.3
+visual_stage = 1
+
+[sub_resource type="Resource" id="Resource_m1351"]
+script = ExtResource("1_yi2pg")
+from_year = 1351
+district_id = "merchant"
+types = Array[ExtResource("2_r1j23")]([ExtResource("3_t4tao"), ExtResource("4_7xhcx"), ExtResource("5_epjog"), ExtResource("6_ufgkh"), ExtResource("9_cguard")])
+hygiene = 0.35
+speed_mult = 1.1
+windup_mult = 0.85
+start_vigilance = 0.4
+visual_stage = 1
+
+[sub_resource type="Resource" id="Resource_m1354"]
+script = ExtResource("1_yi2pg")
+from_year = 1354
+district_id = "merchant"
+types = Array[ExtResource("2_r1j23")]([ExtResource("3_t4tao"), ExtResource("4_7xhcx"), ExtResource("5_epjog"), ExtResource("6_ufgkh"), ExtResource("9_cguard"), ExtResource("7_iikt3")])
+hygiene = 0.5
+speed_mult = 1.15
+windup_mult = 0.8
+start_vigilance = 0.55
+visual_stage = 2
+
+[resource]
+script = ExtResource("8_y1fxl")
+entries = Array[ExtResource("1_yi2pg")]([SubResource("Resource_q1mc6"), SubResource("Resource_1ct5d"), SubResource("Resource_umhmv"), SubResource("Resource_rs6md"), SubResource("Resource_youbw"), SubResource("Resource_ys4oe"), SubResource("Resource_m1347"), SubResource("Resource_m1351"), SubResource("Resource_m1354")])

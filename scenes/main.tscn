@@ -1,0 +1,42 @@
+[gd_scene load_steps=7 format=3 uid="uid://plaag_main_scene"]
+
+[ext_resource type="Script" path="res://scripts/demo_town.gd" id="1_town"]
+[ext_resource type="Shader" path="res://shaders/parchment_ink.gdshader" id="2_shader"]
+[ext_resource type="Script" path="res://scripts/parchment_overlay.gd" id="3_overlay"]
+
+[sub_resource type="Environment" id="Environment_main"]
+background_mode = 1
+background_color = Color(0.93, 0.88, 0.76, 1)
+ambient_light_source = 2
+ambient_light_color = Color(1, 1, 1, 1)
+ambient_light_energy = 0.4
+tonemap_mode = 0
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_parchment"]
+shader = ExtResource("2_shader")
+
+[sub_resource type="QuadMesh" id="QuadMesh_fullscreen"]
+flip_faces = true
+size = Vector2(2, 2)
+
+[node name="Main" type="Node3D"]
+script = ExtResource("1_town")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_main")
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+light_energy = 1.2
+shadow_enabled = true
+
+[node name="Camera3D" type="Camera3D" parent="."]
+fov = 45.0
+far = 200.0
+
+[node name="ParchmentOverlay" type="MeshInstance3D" parent="Camera3D"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -1)
+extra_cull_margin = 16384.0
+mesh = SubResource("QuadMesh_fullscreen")
+material_override = SubResource("ShaderMaterial_parchment")
+script = ExtResource("3_overlay")
+sun = NodePath("../../Sun")

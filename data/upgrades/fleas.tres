@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="UpgradeNodeDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/upgrade_node_def.gd" id="1_xhso1"]
+
+[resource]
+script = ExtResource("1_xhso1")
+id = "fleas"
+title = "Fleas"
+description = "The Colony crawls with fleas. People who pass close may catch the plague."
+cost_pestilence = 22
+cost_bones = 14
+requires = Array[String](["black_bile"])
+effects = {
+"unlock_fleas": 1.0
+}
+tree_position = Vector2(-3.2, 0.1)

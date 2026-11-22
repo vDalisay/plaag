@@ -1,0 +1,27 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/game/rat_catcher.gd" id="1_rc"]
+[ext_resource type="Script" path="res://scripts/components/infection_component.gd" id="2_inf"]
+[ext_resource type="PackedScene" path="res://scenes/game/terrier.tscn" id="3_terrier"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_rc"]
+radius = 0.5
+height = 2.7
+
+[node name="RatCatcher" type="CharacterBody3D" groups=["exterminator", "townsfolk"]]
+collision_layer = 4
+collision_mask = 5
+motion_mode = 1
+script = ExtResource("1_rc")
+terrier_scene = ExtResource("3_terrier")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.35, 0)
+shape = SubResource("CapsuleShape3D_rc")
+
+[node name="Infection" type="Node" parent="."]
+script = ExtResource("2_inf")
+base_rate = 0.0
+gain_multiplier = 0.06
+cleanse_rate = 1.8
+bonus_decay = 0.1

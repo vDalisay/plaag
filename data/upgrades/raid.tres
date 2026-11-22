@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="UpgradeNodeDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/upgrade_node_def.gd" id="1_ckxpr"]
+
+[resource]
+script = ExtResource("1_ckxpr")
+id = "raid"
+title = "Raid"
+description = "Send a few Adults into a house to Bite the people inside."
+cost_pestilence = 5
+cost_bones = 3
+requires = Array[String](["hide"])
+effects = {
+"unlock_raid": 1.0
+}
+tree_position = Vector2(0.6, 2.4)

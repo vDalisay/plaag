@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="UpgradeNodeDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/upgrade_node_def.gd" id="1_jr0xf"]
+
+[resource]
+script = ExtResource("1_jr0xf")
+id = "contagion"
+title = "Contagion"
+description = "The sick cough on the healthy. Infection spreads from person to person."
+cost_pestilence = 30
+cost_bones = 22
+requires = Array[String](["fleas"])
+effects = {
+"unlock_contagion": 1.0
+}
+tree_position = Vector2(-4.4, 1.1)

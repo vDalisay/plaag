@@ -129,3 +129,13 @@ about 10. That's fine for dozens. For hundreds of rats, switch rat visuals to a
 | Lead Rat hits | 3 |
 | Pup maturity | 15 s, shortened by Feeding |
 | Fear bands (rats nearby) | Fight < 4 ≤ Uneasy < 12 ≤ Flee |
+
+## Status (2026-11-22)
+
+M1–M7 are built and integrated on the `prototype` branch:
+- The per-milestone interface contracts are in `docs/dev/`.
+- M6b is the boss balance pass: danger zones, followers dodging, and swarming the boss.
+- The Merchant quarter moved from M7 into M6.
+
+Everything has been verified with headless runs, scripted tests and bot-driven screenshots.
+It has **not** been play-tested by hand yet, so difficulty and feel are unconfirmed.

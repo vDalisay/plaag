@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="UpgradeNodeDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/upgrade_node_def.gd" id="1_ihiim"]
+
+[resource]
+script = ExtResource("1_ihiim")
+id = "old_blood"
+title = "Old Blood"
+description = "The Colony remembers. Part of last Round's Colony returns with you."
+max_level = 4
+cost_pestilence = 10
+cost_bones = 5
+cost_growth = 1.5
+requires = Array[String](["gorge", "hungry_pups"])
+level_values = Array[float]([0.2, 0.5, 0.7, 1.0])
+level_stat = "carry_over"
+tree_position = Vector2(0, -3.3)

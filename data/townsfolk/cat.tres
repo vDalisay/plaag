@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="TownsfolkDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/townsfolk_def.gd" id="1_w1qhu"]
+
+[resource]
+script = ExtResource("1_w1qhu")
+id = "cat"
+look = "cat"
+walk_speed = 1.5
+hp_note = "hunts lone rats; not infectable"
+tier = 1
+base_weight = 0.35
+gain_multiplier = 0.0

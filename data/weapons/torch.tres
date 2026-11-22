@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="WeaponDef" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/weapon_def.gd" id="1_def"]
+
+[resource]
+script = ExtResource("1_def")
+id = &"torch"
+kind = &"torch"
+windup = 0.8
+radius = 0.7
+cooldown = 4.0
+reach = 6.0
+burn_time = 3.0
+burn_delay = 0.25

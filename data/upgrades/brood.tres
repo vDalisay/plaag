@@ -1,0 +1,18 @@
+[gd_resource type="Resource" script_class="UpgradeNodeDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/upgrade_node_def.gd" id="1_0wbht"]
+
+[resource]
+script = ExtResource("1_0wbht")
+id = "brood"
+title = "Brood"
+description = "A nest under the floorboards. One more Adult starts each Round."
+max_level = 3
+cost_pestilence = 5
+cost_bones = 2
+cost_growth = 1.7
+requires = Array[String](["gnaw"])
+effects = {
+"start_adults": 1.0
+}
+tree_position = Vector2(0, -1.5)

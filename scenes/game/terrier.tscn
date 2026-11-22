@@ -1,0 +1,21 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/game/terrier.gd" id="1_terrier"]
+[ext_resource type="Script" path="res://scripts/components/infection_component.gd" id="2_inf"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_terrier"]
+radius = 0.3
+height = 0.9
+
+[node name="Terrier" type="CharacterBody3D" groups=["terrier", "exterminator_pets", "townsfolk"]]
+collision_layer = 0
+collision_mask = 1
+motion_mode = 1
+script = ExtResource("1_terrier")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.45, 0)
+shape = SubResource("CapsuleShape3D_terrier")
+
+[node name="Infection" type="Node" parent="."]
+script = ExtResource("2_inf")

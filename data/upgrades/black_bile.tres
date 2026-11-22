@@ -1,0 +1,18 @@
+[gd_resource type="Resource" script_class="UpgradeNodeDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/upgrade_node_def.gd" id="1_wjj12"]
+
+[resource]
+script = ExtResource("1_wjj12")
+id = "black_bile"
+title = "Black Bile"
+description = "A fouler humour. Infection rises faster in everyone bitten."
+max_level = 4
+cost_pestilence = 4
+cost_bones = 1
+cost_growth = 1.5
+requires = Array[String](["gnaw"])
+effects = {
+"lethality": 0.15
+}
+tree_position = Vector2(-1.7, 0.6)

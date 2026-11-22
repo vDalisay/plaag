@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="UpgradeNodeDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/upgrade_node_def.gd" id="1_vuwhp"]
+
+[resource]
+script = ExtResource("1_vuwhp")
+id = "swift_paws"
+title = "Swift Paws"
+description = "Lean legs for the gutters. The Lead Rat runs faster."
+max_level = 3
+cost_pestilence = 4
+cost_bones = 1
+requires = Array[String](["gnaw"])
+effects = {
+"rat_speed": 0.6
+}
+tree_position = Vector2(1.7, -0.8)

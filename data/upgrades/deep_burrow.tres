@@ -1,0 +1,18 @@
+[gd_resource type="Resource" script_class="UpgradeNodeDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/upgrade_node_def.gd" id="1_dbrw"]
+
+[resource]
+script = ExtResource("1_dbrw")
+id = "deep_burrow"
+title = "Deep Burrow"
+description = "Nests in the walls and under the boards. The Colony stays Hidden longer."
+max_level = 2
+cost_pestilence = 5
+cost_bones = 2
+cost_growth = 1.6
+requires = Array[String](["hide"])
+effects = {
+"hide_duration": 2.0
+}
+tree_position = Vector2(-2.1, 2.3)

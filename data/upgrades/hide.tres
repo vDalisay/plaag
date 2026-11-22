@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="UpgradeNodeDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/upgrade_node_def.gd" id="1_rgufa"]
+
+[resource]
+script = ExtResource("1_rgufa")
+id = "hide"
+title = "Hide"
+description = "Walk into a door and the whole Colony slips inside, out of sight."
+cost_pestilence = 3
+cost_bones = 2
+requires = Array[String](["gnaw"])
+effects = {
+"unlock_hide": 1.0
+}
+tree_position = Vector2(-0.8, 1.6)

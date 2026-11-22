@@ -1,0 +1,12 @@
+[gd_resource type="Resource" script_class="WeaponDef" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/weapon_def.gd" id="1_def"]
+
+[resource]
+script = ExtResource("1_def")
+id = &"stomp"
+windup = 0.6
+radius = 1.1
+cooldown = 2.5
+reach = 1.4
+kills_pups_only = false

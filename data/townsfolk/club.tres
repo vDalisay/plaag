@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="TownsfolkDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/townsfolk_def.gd" id="1_8y2ex"]
+[ext_resource type="Resource" path="res://data/weapons/club.tres" id="2_irtjw"]
+
+[resource]
+script = ExtResource("1_8y2ex")
+id = "club"
+look = "club"
+weapon = ExtResource("2_irtjw")
+walk_speed = 1.5
+hp_note = "slow, wide, heavy"
+tier = 3
+base_weight = 0.4
+gain_multiplier = 0.9

@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="UpgradeNodeDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/upgrade_node_def.gd" id="1_e45jw"]
+
+[resource]
+script = ExtResource("1_e45jw")
+id = "long_teeth"
+title = "Long Teeth"
+description = "Yellow, curving teeth. Adults Bite from further away."
+max_level = 3
+cost_pestilence = 4
+cost_bones = 1
+requires = Array[String](["gnaw"])
+effects = {
+"bite_range": 0.2
+}
+tree_position = Vector2(1.7, 0.8)

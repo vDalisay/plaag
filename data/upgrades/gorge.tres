@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="UpgradeNodeDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/upgrade_node_def.gd" id="1_kftci"]
+
+[resource]
+script = ExtResource("1_kftci")
+id = "gorge"
+title = "Gorge"
+description = "Bolt the carrion down. Feeding on a corpse is quicker."
+max_level = 3
+cost_pestilence = 4
+cost_bones = 1
+requires = Array[String](["brood"])
+effects = {
+"feed_time": -0.3
+}
+tree_position = Vector2(-1.3, -2.3)
