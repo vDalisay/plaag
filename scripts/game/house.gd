@@ -3,7 +3,11 @@
 ## The District builds the visual with Props.house() and passes the same
 ## numbers to setup(), which works out the door point and the roof planes.
 ## When every resident is dead the house is a dead house: an ink X is drawn
-## across its roof (under the visual root, so it squashes with the cutaway).
+## across its roof and a red plague cross is painted on its door, as plague
+## houses were marked (both under the visual root, so they squash with the
+## cutaway), and a short red miasma puff rises off the roof.
+## A Bite inside (show_bite) shakes plaster dust off the eaves (pooled Vfx)
+## and shivers the house.
 class_name House
 extends StaticBody3D
 
@@ -11,6 +15,14 @@ signal occupants_changed
 signal house_died                            # every resident is dead (fires once)
 
 const Props := preload("res://scripts/town_props.gd")
+const Vfx := preload("res://scripts/vfx/vfx.gd")
+## The plague cross: centre height on the door, half width / half height of
+## its arms, stroke width.
+const CROSS_Y := 1.05
+const CROSS_HALF := Vector2(0.36, 0.5)
+const CROSS_W := 0.13
+## At most one plaster fall per house this often (many rats Bite inside).
+const PLASTER_GAP_MS := 220
 ## How far in front of the facade (past the collider) the door point sits.
 const DOOR_OUT := 0.55
 
@@ -31,6 +43,8 @@ var _roof_base := Vector3.ZERO
 var _roof_length := 0.0
 var _roof_depth := 0.0
 var _roof_rise := 0.0
+var _plaster_ms := -100000
+var _door_local := Vector3.ZERO              # door face centre at the ground, visual-local
 var _shiver: Tween
 
 
@@ -48,6 +62,7 @@ func setup(root: Node3D, length: float, depth: float, top: float, jetty: float,
 	var bw := length / n_bays
 	var door_x := -length * 0.5 + (door_bay + 0.5) * bw
 	var xf := root.global_transform
+	_door_local = Vector3(door_x, 0.0, depth * 0.5)
 	door_position = xf * Vector3(door_x, 0.0, front + DOOR_OUT)
 	door_position.y = 0.0
 	door_normal = (xf.basis * Vector3(0, 0, 1)).normalized()
@@ -123,23 +138,24 @@ func _check_dead() -> void:
 			return
 	_dead = true
 	_draw_roof_x()
+	_paint_cross()
+	if visual != null:
+		Vfx.play(get_tree(), &"house_miasma", visual.global_transform * (_roof_base + Vector3(0, _roof_rise, 0)))
 	house_died.emit()
 
 
 # ---------------------------------------------------------------------- feedback
-## A Bite landed inside: a small red mark at the door and a shiver of the house.
+## A Bite landed inside: plaster dust falls from the front eaves and the
+## house shivers.
 func show_bite() -> void:
 	if visual == null or _props == null:
 		return
-	var dot := Node3D.new()
-	dot.name = "InsideBite"
-	get_parent().add_child(dot)
-	var side := door_normal.cross(Vector3.UP)
-	dot.global_position = door_position - door_normal * 0.25 + side * randf_range(-0.5, 0.5)
-	_props.ground_dot(dot, Vector3.ZERO, 0.16)
-	var tw := dot.create_tween()
-	tw.tween_property(dot, "scale", Vector3(0.2, 1.0, 0.2), 0.35).set_delay(0.05).set_ease(Tween.EASE_IN)
-	tw.tween_callback(dot.queue_free)
+	var now := Time.get_ticks_msec()
+	if now - _plaster_ms < PLASTER_GAP_MS:
+		return
+	_plaster_ms = now
+	var eave := _roof_base + Vector3(randf_range(-0.4, 0.4) * _roof_length, -0.1, _roof_depth * 0.5)
+	Vfx.play(get_tree(), &"plaster", visual.global_transform * eave, door_normal)
 	if _shiver and _shiver.is_valid():
 		return
 	_shiver = visual.create_tween()
@@ -176,6 +192,52 @@ func _draw_roof_x() -> void:
 	for m in segments:
 		tw.tween_callback(m.show)
 		tw.tween_interval(0.04)
+
+
+## The red plague cross painted on the door: two brush strokes, a little
+## crooked, painted one after the other.
+func _paint_cross() -> void:
+	if visual == null or _props == null:
+		return
+	var root := Node3D.new()
+	root.name = "PlagueCross"
+	visual.add_child(root)
+	var c := _door_local + Vector3(randf_range(-0.04, 0.04), CROSS_Y, 0.1)
+	var tilt := randf_range(-0.12, 0.12)
+	var up := Vector3(sin(tilt), cos(tilt), 0.0)
+	var across := Vector3(cos(tilt), -sin(tilt), 0.0)
+	var segments: Array[MeshInstance3D] = []
+	_brush(root, c + up * CROSS_HALF.y, c - up * CROSS_HALF.y, segments)
+	_brush(root, c - across * CROSS_HALF.x + up * 0.1, c + across * CROSS_HALF.x + up * 0.08, segments)
+	for m in segments:
+		m.visible = false
+	var tw := root.create_tween()
+	for m in segments:
+		tw.tween_callback(m.show)
+		tw.tween_interval(0.05)
+
+
+## One red brush stroke on the door plane (+Z out), wobbling a little and
+## heaviest in the middle.
+func _brush(parent: Node3D, from: Vector3, to: Vector3, out: Array[MeshInstance3D]) -> void:
+	var n := 4
+	var dir := (to - from).normalized()
+	var across := dir.cross(Vector3(0, 0, 1)).normalized()
+	var pts: Array[Vector3] = []
+	for i in n + 1:
+		var wob := 0.0 if i == 0 or i == n else randf_range(-0.035, 0.035)
+		pts.append(from.lerp(to, float(i) / n) + across * wob)
+	for i in n:
+		var w := CROSS_W * (0.8 + 0.35 * sin(PI * (i + 0.5) / n))
+		var a := pts[i] - dir * 0.03
+		var b := pts[i + 1] + dir * 0.03
+		var seg := MeshInstance3D.new()
+		seg.mesh = _props.box(Vector3(w, 0.04, (b - a).length()))
+		seg.material_override = _props.mat(Props.RED)
+		seg.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		seg.transform = Transform3D(Basis.looking_at(b - a, Vector3(0, 0, 1)), (a + b) * 0.5)
+		parent.add_child(seg)
+		out.append(seg)
 
 
 func _stroke(parent: Node3D, from: Vector3, to: Vector3, nrm: Vector3, out: Array[MeshInstance3D]) -> void:

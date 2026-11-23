@@ -1,7 +1,7 @@
 ## The Lead Rat: the one rat the player steers. Scurries over the ground plane
 ## (move_* actions), turns to face where it runs and Bites automatically via
-## its BiteComponent child. Each Bite shows a short lunge and a red dot on the
-## ground at the victim's feet.
+## its BiteComponent child. Each Bite shows a short lunge (the BiteComponent
+## sprays the Vfx "bite" burst at the victim).
 ## With `bot_mode` it steers itself to the nearest healthy townsperson (--bot);
 ## once an Exterminator is in the District it goes for it and circles it so
 ## the Colony crowds round and Bites (M6 boss tests). It dodges danger zones
@@ -16,6 +16,8 @@
 ## UX pass: a thin near-black ground ring (the shader inks it as a circle)
 ## always marks the Lead Rat in the swarm; it flashes wide when hit and is
 ## hidden while Hidden or dead.
+## VFX pass: a hit throws an ink burst and an ink ring (Vfx "lead_hurt") and
+## sends a Vfx disturbance; death leaves a large ink splat ("lead_death").
 class_name LeadRat
 extends CharacterBody3D
 
@@ -23,6 +25,11 @@ signal hurt(hits_left: int)
 signal died
 
 const Props := preload("res://scripts/town_props.gd")
+const Vfx := preload("res://scripts/vfx/vfx.gd")
+## Bite lunge: seconds out and back, and how far the body darts forward.
+const LUNGE_OUT := 0.07
+const LUNGE_BACK := 0.16
+const LUNGE_REACH := 0.45
 ## Seconds to funnel into a door / pour back out of it.
 const FUNNEL_TIME := 0.3
 ## Seconds a knockback shove lasts (the speed eases off to 0 over it).
@@ -69,7 +76,7 @@ var wish := Vector3.ZERO
 
 var _visual: Node3D          # yaw pivot, faces the movement direction
 var _body: Node3D            # child of the pivot, lunges forward on a Bite
-var _lunge: Tween
+var _lunge_t := INF          # seconds since the last Bite lunge began
 var _bot_detour := Vector3.ZERO
 var _bot_detour_left := 0.0
 var _bot_stuck_check := 0.0
@@ -119,6 +126,22 @@ func _ready() -> void:
 	_bot_stuck_from = global_position
 	_layer = collision_layer
 	_mask = collision_mask
+	# Make the District's Vfx node now rather than on the first Bite.
+	(func() -> void: Vfx.get_vfx(get_tree())).call_deferred()
+
+
+func _process(delta: float) -> void:
+	if _lunge_t == INF:
+		return
+	_lunge_t += delta
+	var z := 0.0
+	if _lunge_t < LUNGE_OUT:
+		z = LUNGE_REACH * ease(_lunge_t / LUNGE_OUT, 0.5)
+	elif _lunge_t < LUNGE_OUT + LUNGE_BACK:
+		z = LUNGE_REACH * (1.0 - smoothstep(0.0, 1.0, (_lunge_t - LUNGE_OUT) / LUNGE_BACK))
+	else:
+		_lunge_t = INF
+	_body.position = Vector3(0, 0, z)
 
 
 func _physics_process(delta: float) -> void:
@@ -347,25 +370,8 @@ func _on_bit(target: Node3D) -> void:
 	to.y = 0.0
 	if to.length_squared() > 0.0001:
 		_visual.rotation.y = atan2(to.x, to.z)
-	# Short forward lunge of the body and back.
-	if _lunge and _lunge.is_valid():
-		_lunge.kill()
-	_body.position = Vector3.ZERO
-	_lunge = create_tween()
-	_lunge.tween_property(_body, "position", Vector3(0, 0, 0.45), 0.07).set_ease(Tween.EASE_OUT)
-	_lunge.tween_property(_body, "position", Vector3.ZERO, 0.16).set_ease(Tween.EASE_IN_OUT)
-	# Red ground dot at the victim's feet that shrinks away.
-	var world := get_parent() as Node3D
-	if world == null:
-		return
-	var dot := Node3D.new()
-	dot.name = "BiteDot"
-	world.add_child(dot)
-	dot.global_position = Vector3(target.global_position.x, 0.0, target.global_position.z)
-	_props.ground_dot(dot, Vector3.ZERO, 0.32)
-	var tw := dot.create_tween()
-	tw.tween_property(dot, "scale", Vector3(0.2, 1.0, 0.2), 0.33).set_delay(0.07).set_ease(Tween.EASE_IN)
-	tw.tween_callback(dot.queue_free)
+	# Short forward lunge of the body and back (_process; no Tween per Bite).
+	_lunge_t = 0.0
 
 
 # ---------------------------------------------------------------------- feeding
@@ -465,6 +471,9 @@ func hit() -> void:
 		return
 	hits_left = maxi(hits_left - 1, 0)
 	_flash_ring()
+	if hits_left > 0:
+		Vfx.play(get_tree(), &"lead_hurt", global_position)
+	Vfx.disturb_at(get_tree(), global_position, 5.0)
 	hurt.emit(hits_left)
 	if hits_left == 1:
 		_bot_want_hide = true
@@ -511,6 +520,7 @@ func _die() -> void:
 	tw.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	tw.tween_property(_visual, "scale", Vector3(1.25, 1.3, 0.85), 0.07)
 	tw.tween_property(_visual, "scale", Vector3(1.45, 0.12, 1.3), 0.12)
+	Vfx.play(get_tree(), &"lead_death", global_position)
 	var c := _get_colony()
 	if c:
 		c.on_lead_died()

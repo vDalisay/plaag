@@ -13,6 +13,8 @@ class_name Exterminator
 extends CharacterBody3D
 
 const Props := preload("res://scripts/town_props.gd")
+## Pooled event effects (subclasses use it too).
+const Vfx := preload("res://scripts/vfx/vfx.gd")
 ## Dark sepia of the corpse (drawn as heavy hatching, like a townsperson's).
 const CORPSE_INK := Color(0.34, 0.29, 0.24)
 const WORLD_MASK := 1
@@ -223,6 +225,8 @@ func _on_died() -> void:
 	tw.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	tw.tween_property(_visual, "rotation", Vector3(0.0, 0.0, side * PI * 0.5), 0.6)
 	tw.tween_property(_visual, "position", Vector3(0.0, 0.5, 0.0), 0.6)
+	# A big red miasma bloom (the Round ends on this frame; it shows frozen).
+	Vfx.play(get_tree(), &"ext_beaten", global_position)
 	beaten.emit()
 
 

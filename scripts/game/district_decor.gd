@@ -257,15 +257,19 @@ func _ground_y(p: Vector3) -> float:
 	return 0.07 if _on_paving(p, 0.0) else 0.012
 
 
-## A flat, irregular dark puddle: a few overlapping squashed discs.
+## A flat, irregular puddle: a few overlapping squashed discs of dark mud,
+## each with a slightly smaller disc of blue water on it (graphics pass:
+## water is blue), so a thin dark rim shows round the water.
 func _puddle(p: Vector3) -> void:
 	var y := _ground_y(p)
 	var n := _rng.randi_range(2, 4)
 	for i in n:
 		var off := Vector3(_rng.randf_range(-0.6, 0.6), 0, _rng.randf_range(-0.35, 0.35)) if i > 0 else Vector3.ZERO
 		var r := _rng.randf_range(0.5, 0.95) * (1.0 if i == 0 else 0.7)
-		_k.part(_d, _k.cyl(r, r, 0.02, 12), PUDDLE, p + off + Vector3(0, y + i * 0.002, 0),
-			Vector3(0, _rng.randf() * 180.0, 0), Vector3(_rng.randf_range(1.0, 1.7), 1.0, 1.0))
+		var rot := Vector3(0, _rng.randf() * 180.0, 0)
+		var scl := Vector3(_rng.randf_range(1.0, 1.7), 1.0, 1.0)
+		_k.part(_d, _k.cyl(r, r, 0.02, 12), PUDDLE, p + off + Vector3(0, y + i * 0.002, 0), rot, scl)
+		_k.part(_d, _k.cyl(r - 0.1, r - 0.1, 0.02, 12), WATER, p + off + Vector3(0, y + 0.012 + i * 0.002, 0), rot, scl)
 
 
 func _refuse(p: Vector3) -> void:

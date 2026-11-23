@@ -3,7 +3,8 @@
 ## rats), follows the Lead Rat's breadcrumb trail when a wall cuts it off, and
 ## Feeds on corpses it passes. Adults Bite (BiteComponent child) and breed a
 ## Pup per meal; Pups Feed to Mature sooner and grow into Adults.
-## One hit() kills it: it squashes flat, leaves a small ink smear and is freed.
+## One hit() kills it: it squashes flat, bursts in an ink splat (Vfx
+## "rat_splat": droplets and a ground splat) and is freed.
 ## knockback() shoves an Adult away (no damage) and kills a Pup.
 ## Houses: hide_in() funnels it into a door (hidden, out of group "rats", in
 ## "hidden_rats", invulnerable, Biting the occupants); pour_out() brings it
@@ -15,10 +16,19 @@
 ## Pups run slower. Outside, it waits at the edge rather than walk into a
 ## zone that is winding up, and skirts round a lasting one (fire, trap).
 ## Swarm: while the Colony rings a target, an Adult runs to its swarm slot.
+## VFX pass: Feeding nibbles off tiny dark flecks, a Pup maturing pops a
+## small ink ring, raiders kick up dust at the door going in and out.
 class_name ColonyRat
 extends CharacterBody3D
 
 const Props := preload("res://scripts/town_props.gd")
+const Vfx := preload("res://scripts/vfx/vfx.gd")
+## Bite lunge: seconds out and back, and how far the body darts forward.
+const LUNGE_OUT := 0.06
+const LUNGE_BACK := 0.14
+const LUNGE_REACH := 0.35
+## Seconds between nibble flecks while Feeding.
+const NIBBLE_GAP := Vector2(0.35, 0.8)
 const ADULT_SCALE := 0.9
 const PUP_SCALE := 0.55
 ## Seconds to funnel into a door / pour back out of it.
@@ -89,6 +99,8 @@ var _inside_time := 0.0
 var _move_tween: Tween
 var _knock_vel := Vector3.ZERO
 var _knock_left := 0.0
+var _lunge_t := INF          # seconds since the last Bite lunge began
+var _nibble_left := 0.0
 
 
 func _ready() -> void:
@@ -454,6 +466,7 @@ func _raid_go(delta: float) -> void:
 	var here := Vector3(global_position.x, 0.0, global_position.z)
 	var door := house.door_position
 	if here.distance_to(door) < 0.7:
+		Vfx.play(get_tree(), &"door_dust", house.door_position, house.door_normal, 0.6)
 		hide_in(house)
 		return
 	_check_left -= delta
@@ -496,6 +509,7 @@ func _update_inside(delta: float) -> void:
 		_inside_time = -INF
 		var side := house.door_normal.cross(Vector3.UP)
 		var to := house.door_position + house.door_normal * randf_range(0.5, 1.1) + side * randf_range(-0.6, 0.6)
+		Vfx.play(get_tree(), &"door_dust", house.door_position, house.door_normal, 0.6)
 		pour_out(to)
 
 
@@ -512,6 +526,7 @@ func _kill_move_tween() -> void:
 func _mature() -> void:
 	is_pup = false
 	_add_bite()
+	Vfx.play(get_tree(), &"pup_mature", global_position)
 	var tw := create_tween()
 	tw.tween_property(_visual, "scale", Vector3.ONE * ADULT_SCALE * 1.12, 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	tw.tween_property(_visual, "scale", Vector3.ONE * ADULT_SCALE, 0.15)
@@ -528,9 +543,24 @@ func _animate(flat: Vector3, eating: bool, delta: float) -> void:
 		# Head down, quick nibbles.
 		_body.rotation.x = 0.25 + 0.12 * sin(_run_time * 22.0)
 		_body.position.y = 0.0
+		_nibble_left -= delta
+		if _nibble_left <= 0.0:
+			_nibble_left = randf_range(NIBBLE_GAP.x, NIBBLE_GAP.y)
+			var at := _corpse.global_position if _corpse != null and is_instance_valid(_corpse) else global_position
+			Vfx.play(get_tree(), &"nibble", global_position.lerp(at, 0.3))
 	else:
 		_body.rotation.x = 0.0
 		_body.position.y = absf(sin(_run_time * 18.0)) * 0.05 * minf(speed / 4.0, 1.0)
+	if _lunge_t != INF:
+		_lunge_t += delta
+		var z := 0.0
+		if _lunge_t < LUNGE_OUT:
+			z = LUNGE_REACH * _lunge_t / LUNGE_OUT
+		elif _lunge_t < LUNGE_OUT + LUNGE_BACK:
+			z = LUNGE_REACH * (1.0 - (_lunge_t - LUNGE_OUT) / LUNGE_BACK)
+		else:
+			_lunge_t = INF
+		_body.position.z = z
 
 
 func _on_bit(target: Node3D) -> void:
@@ -540,17 +570,9 @@ func _on_bit(target: Node3D) -> void:
 	to.y = 0.0
 	if to.length_squared() > 0.0001:
 		_visual.rotation.y = atan2(to.x, to.z)
-	var tw := create_tween()
-	tw.tween_property(_body, "position:z", 0.35, 0.06)
-	tw.tween_property(_body, "position:z", 0.0, 0.14)
-	var dot := Node3D.new()
-	dot.name = "BiteDot"
-	colony.add_child(dot)
-	dot.global_position = Vector3(target.global_position.x, 0.0, target.global_position.z) + _random_flat(0.3)
-	colony.props.ground_dot(dot, Vector3.ZERO, 0.2)
-	var dtw := dot.create_tween()
-	dtw.tween_property(dot, "scale", Vector3(0.2, 1.0, 0.2), 0.3).set_delay(0.06).set_ease(Tween.EASE_IN)
-	dtw.tween_callback(dot.queue_free)
+	# Lunge forward and back (in _animate; no Tween per Bite). The
+	# BiteComponent sprays the Bite burst.
+	_lunge_t = 0.0
 
 
 func _random_flat(r: float) -> Vector3:
@@ -575,7 +597,7 @@ func hit() -> void:
 	var s := _visual.scale.x
 	var tw := create_tween().set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	tw.tween_property(_visual, "scale", Vector3(s * 1.35, s * 0.12, s * 1.35), 0.12)
-	tw.tween_callback(_leave_smear)
+	tw.tween_callback(_splat)
 	tw.tween_interval(0.25)
 	tw.tween_callback(queue_free)
 
@@ -608,15 +630,6 @@ func _update_knock(delta: float) -> void:
 		_body.rotation.x = 0.0
 
 
-## A small flat ink mark that lingers on the ground, then fades.
-func _leave_smear() -> void:
-	if colony == null:
-		return
-	var kit := colony.props
-	var smear := kit.part(colony, kit.cyl(0.26, 0.26, 0.02, 10), Props.INK,
-		Vector3(global_position.x, 0.02, global_position.z), Vector3(0, randf() * 360.0, 0),
-		Vector3(1.5, 1.0, 0.8) * _visual.scale.x / ADULT_SCALE)
-	var tw := smear.create_tween()
-	tw.tween_interval(8.0)
-	tw.tween_property(smear, "scale", Vector3.ZERO, 1.0)
-	tw.tween_callback(smear.queue_free)
+## The ink splat of its death: droplets flung out and a mark on the ground.
+func _splat() -> void:
+	Vfx.play(get_tree(), &"rat_splat", global_position, Vector3.ZERO, 0.7 if is_pup else 1.0)

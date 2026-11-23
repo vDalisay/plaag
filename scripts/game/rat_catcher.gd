@@ -206,22 +206,10 @@ func _free_telegraph() -> void:
 	_fill = null
 
 
-## The arc's edge flung outwards and fading after the strike.
+## Dust swept along the arc after the strike (pooled), and a disturbance.
 func _swoosh() -> void:
-	var puff := world_node("SweepPuff", _sweep_origin, atan2(_sweep_dir.x, _sweep_dir.z))
-	var m := fade_mat()
-	var half := deg_to_rad(sweep_deg) * 0.5
-	var prev := Vector3.ZERO
-	for i in ARC_SEGMENTS + 1:
-		var a := lerpf(-half, half, float(i) / ARC_SEGMENTS)
-		var p := Vector3(sin(a), 0.0, cos(a)) * sweep_radius * 0.9 + Vector3(0, 0.15, 0)
-		if i > 0:
-			_props.strip(puff, prev, p, 0.14, Props.INK).material_override = m
-		prev = p
-	var tw := puff.create_tween().set_parallel(true)
-	tw.tween_property(puff, "scale", Vector3(1.3, 1.0, 1.3), 0.3).set_ease(Tween.EASE_OUT)
-	tw.tween_property(m, "albedo_color:a", 0.0, 0.3).set_ease(Tween.EASE_IN)
-	tw.chain().tween_callback(puff.queue_free)
+	Vfx.play(get_tree(), &"broom", _sweep_origin, _sweep_dir, sweep_radius, sweep_deg)
+	Vfx.disturb_at(get_tree(), _sweep_origin + _sweep_dir * sweep_radius * 0.5, 4.0)
 
 
 # ---------------------------------------------------------------------- traps
@@ -371,6 +359,8 @@ class SpringTrap extends DangerZone:
 	func _snap() -> void:
 		sprung = true
 		disarm()
+		Vfx.play(get_tree(), &"trap_snap", global_position)
+		Vfx.disturb_at(get_tree(), global_position, 3.5)
 		for t in _teeth:
 			t.rotation.x = -1.2
 		_jaws.scale = Vector3(0.55, 1.6, 0.55)

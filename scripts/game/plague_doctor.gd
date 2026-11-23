@@ -12,8 +12,17 @@
 ##     and killing Pups.
 ## Rats are thrown out of Bite range, so only a big Colony Biting him at the
 ## same moment gets through his Cleanse.
+## VFX pass (pooled, scripts/vfx/vfx.gd): sage herb smoke swirls round him
+## all the time; the cleanse pulse is a ring of green puffs racing out to
+## `pulse_radius`, with green flecks rising from everyone it cleansed; the
+## swinging censer trails wisps; the incense cloud is pale and sage puffs
+## billowing up inside an ink rim.
 class_name PlagueDoctor
 extends Exterminator
+
+## Herb smoke puffs a second round him, and censer wisps a second in a swing.
+const HERB_RATE := 9.0
+const TRAIL_RATE := 24.0
 
 @export var keep_distance := 3.0
 @export var pulse_interval := 3.0
@@ -39,6 +48,8 @@ var _telegraph: DangerZone
 var _fill: Node3D
 var _censer: Node3D
 var _cane_arm: Node3D
+var _herb_left := 0.0
+var _trail_left := 0.0
 
 
 func _build() -> void:
@@ -144,7 +155,7 @@ func _rats_centre(radius: float) -> Vector3:
 
 # ---------------------------------------------------------------------- cleanse pulse
 ## Cleanses `pulse_amount` from every living townsperson within `pulse_radius`
-## and sends the INK ring out. Returns how many were Cleansed.
+## and sends the green pulse ring out. Returns how many were Cleansed.
 func pulse() -> int:
 	pulses += 1
 	var here := global_position
@@ -156,25 +167,14 @@ func pulse() -> int:
 		if inf.value > 0.0:
 			inf.cleanse(pulse_amount)
 			n += 1
+			Vfx.play(get_tree(), &"heal", t.global_position)
 	_pulse_ring()
 	return n
 
 
+## The pulse: green puffs racing out to the radius, and the cane raised.
 func _pulse_ring() -> void:
-	var ring := world_node("CleansePulse", global_position)
-	var m := fade_mat()
-	var thick := 0.16
-	var mi := MeshInstance3D.new()
-	mi.mesh = _props.torus(1.0, thick / pulse_radius)
-	mi.material_override = m
-	mi.position = Vector3(0, 0.14, 0)
-	ring.add_child(mi)
-	ring.scale = Vector3(0.4, 1.0, 0.4)
-	var tw := ring.create_tween()
-	tw.tween_property(ring, "scale", Vector3(pulse_radius, 1.0, pulse_radius), pulse_expand) \
-		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	tw.tween_property(m, "albedo_color:a", 0.0, 0.35)
-	tw.tween_callback(ring.queue_free)
+	Vfx.play(get_tree(), &"cleanse_pulse", global_position, Vector3.ZERO, pulse_radius, pulse_expand)
 	# The cane is raised for the pulse.
 	if _cane_arm != null:
 		var ct := _cane_arm.create_tween()
@@ -227,32 +227,9 @@ func _burst() -> int:
 	return n
 
 
-## Pale puffs that billow up and fade, with an ink rim flung outwards.
+## Pale and sage puffs that billow up, with an ink rim flung outwards.
 func _cloud() -> void:
-	var cloud := world_node("IncenseCloud", _incense_at)
-	var tw := cloud.create_tween().set_parallel(true)
-	for i in 9:
-		var a := TAU * float(i) / 9.0 + _rng.randf() * 0.4
-		var rr := incense_radius * (0.25 + 0.55 * float(i % 3) / 2.0)
-		var m := fade_mat(Props.CLOTH if i % 2 == 0 else Props.STONE)
-		var puff := MeshInstance3D.new()
-		puff.mesh = _props.sphere(0.55, 10)
-		puff.material_override = m
-		puff.position = Vector3(sin(a) * rr, 0.4, cos(a) * rr)
-		cloud.add_child(puff)
-		tw.tween_property(puff, "position", puff.position * 1.25 + Vector3(0, 1.2, 0), 1.4)
-		tw.tween_property(puff, "scale", Vector3.ONE * 1.8, 1.4)
-		tw.tween_property(m, "albedo_color:a", 0.0, 1.4).set_ease(Tween.EASE_IN)
-	var rim_m := fade_mat()
-	var rim := MeshInstance3D.new()
-	rim.mesh = _props.torus(incense_radius, 0.12)
-	rim.material_override = rim_m
-	rim.position = Vector3(0, 0.14, 0)
-	rim.scale = Vector3(1, 0.25, 1)
-	cloud.add_child(rim)
-	tw.tween_property(rim, "scale", Vector3(1.3, 0.25, 1.3), 0.35).set_ease(Tween.EASE_OUT)
-	tw.tween_property(rim_m, "albedo_color:a", 0.0, 0.4)
-	tw.chain().tween_callback(cloud.queue_free)
+	Vfx.play(get_tree(), &"incense", _incense_at, Vector3.ZERO, incense_radius)
 
 
 func _free_telegraph() -> void:
@@ -269,10 +246,19 @@ func _on_beaten() -> void:
 
 func _animate(delta: float) -> void:
 	super._animate(delta)
+	if not is_beaten:
+		_herb_left -= delta
+		if _herb_left <= 0.0:
+			_herb_left += 1.0 / HERB_RATE
+			Vfx.play(get_tree(), &"herb", global_position)
 	if _censer == null:
 		return
 	if _incense_left > 0.0:
 		var t := incense_progress()
 		_censer.rotation.x = sin(t * TAU * 2.0) * 1.2 * t
+		_trail_left -= delta
+		if _trail_left <= 0.0:
+			_trail_left += 1.0 / TRAIL_RATE
+			Vfx.play(get_tree(), &"incense_trail", _censer.global_transform * Vector3(0, -0.4, 0))
 	else:
 		_censer.rotation.x = sin(_gait * 3.0) * 0.25

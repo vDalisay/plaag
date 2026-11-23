@@ -40,6 +40,8 @@ const FORCE_EXTERMINATOR_AFTER := 3.0
 
 signal exterminator_arrived(exterminator: Node3D)
 
+const Vfx := preload("res://scripts/vfx/vfx.gd")
+
 ## Set by the District before add_child.
 var district: Node3D
 var person_scene: PackedScene
@@ -225,6 +227,8 @@ func spawn_exterminator() -> Node3D:
 	parent.add_child(ext)
 	exterminator = ext
 	_arrived_at = _elapsed
+	# A dust burst at the gate (it also scares the crows: Vfx.disturbance).
+	Vfx.play(get_tree(), &"ext_arrive", gate)
 	print("spawner: exterminator %s arrived at (%.1f, %.1f) after %.1f s, district_infection=%.2f" % [
 		ext.name, gate.x, gate.z, _elapsed, district_infection()])
 	if ext.has_signal("beaten"):

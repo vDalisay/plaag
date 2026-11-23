@@ -13,6 +13,9 @@ class_name Terrier
 extends CharacterBody3D
 
 const Props := preload("res://scripts/town_props.gd")
+const Vfx := preload("res://scripts/vfx/vfx.gd")
+## Run dust: a puff behind it this often while it hunts or lunges.
+const DUST_GAP := 0.08
 const CORPSE_INK := Color(0.34, 0.29, 0.24)
 const SCALE := 1.8
 ## Coat: a mid sepia the shader hatches, so it reads apart from the solid-ink
@@ -35,6 +38,7 @@ enum Mode { HUNT, WINDUP, LUNGE, PAUSE, SNIFF, DEAD }
 var mode := Mode.HUNT
 var catches := 0
 var meals_left := MEALS
+var _dust_left := 0.0
 
 var _rng := RandomNumberGenerator.new()
 var _props: Props
@@ -125,6 +129,10 @@ func _physics_process(delta: float) -> void:
 			_lunge(lead, delta, slow)
 		_:
 			_hunt(lead, delta, slow)
+	_dust_left -= delta
+	if _dust_left <= 0.0 and velocity.length_squared() > 4.0:
+		_dust_left = DUST_GAP
+		Vfx.run_dust_at(get_tree(), global_position, velocity, 1.3)
 	_update_zone(slow)
 	_animate()
 

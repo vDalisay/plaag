@@ -3,7 +3,8 @@
 ## one row per setting of the Settings autoload.
 ##
 ## Rows: Screen shake (slider 0-100%), Damage numbers (toggle), Reduce motion
-## (toggle), HUD size (slider 80-140%), Fullscreen (toggle), then Back. Every
+## (toggle), HUD size (slider 80-140%), Effects (Full / Reduced), Fullscreen
+## (toggle), then Back. Every
 ## change goes through Settings.set_value(); Back, B or Esc emits `closed` and
 ## frees the panel. Works while the tree is paused (process_mode always) and
 ## is fully navigable with the d-pad / stick / arrows (left / right move a
@@ -19,6 +20,7 @@ var _settings: Node
 var _rows: Array[Control] = []
 var _values := {}               # key -> Label showing the value
 var _controls := {}             # key -> Range / Button
+var _choices := {}              # key -> [label for 0, label for 1] (two-way int settings)
 var _back: Button
 var _closing := false
 
@@ -85,6 +87,8 @@ func _build() -> void:
 	_toggle_row(box, "Damage numbers", "damage_numbers")
 	_toggle_row(box, "Reduce motion", "reduce_motion")
 	_slider_row(box, "HUD size", "hud_scale", 0.8, 1.4, 0.05)
+	_toggle_row(box, "Effects", "effects_level")
+	_choices["effects_level"] = ["Reduced", "Full"]
 	_toggle_row(box, "Fullscreen", "fullscreen")
 
 	box.add_child(_rule())
@@ -222,6 +226,8 @@ func _sync() -> void:
 			var b := c as Button
 			b.set_pressed_no_signal(bool(v) if v != null else false)
 			b.text = "—" if v == null else ("On" if bool(v) else "Off")
+			if v != null and _choices.has(key):
+				b.text = str(_choices[key][1 if bool(v) else 0])
 			b.disabled = v == null
 
 
@@ -230,7 +236,7 @@ func _on_slider(v: float, key: String) -> void:
 
 
 func _on_toggle(on: bool, key: String) -> void:
-	_apply(key, on)
+	_apply(key, (1 if on else 0) if _choices.has(key) else on)
 
 
 func _apply(key: String, v: Variant) -> void:

@@ -157,5 +157,24 @@ A UX pass followed. The contract is in `docs/dev/ux_contract.md`.
   - ink-blot scene transitions;
   - gamepad and keyboard prompts that follow the last device used.
 
+A graphics and VFX pass followed. The contract is in `docs/dev/vfx_contract.md`.
+- **Event effects** (`scripts/vfx/`): pooled, ink-drawn effects for every event:
+  - Bites, Infection, deaths, rats and Pups;
+  - every weapon;
+  - the Plague Doctor's herbs;
+  - Exterminators;
+  - Hide and Raid;
+  - the plague cross on a fallen house's door.
+- **World look** (`scripts/world/`):
+  - ground clutter and roofs that change with the Year stage;
+  - azure slate in the Merchant quarter;
+  - chimney smoke that stops when a house falls, and its windows go dark;
+  - crows;
+  - laundry and signs;
+  - ripples;
+  - a plague stain on the page that follows District Infection.
+- **Effects setting:** Full / Reduced.
+- **Performance:** 1080p frame rates under full load are the same as before the pass or better.
+
 Everything has been verified with headless runs, scripted tests and bot-driven screenshots.
 It has **not** been play-tested by hand yet, so difficulty and feel are unconfirmed.

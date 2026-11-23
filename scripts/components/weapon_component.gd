@@ -11,10 +11,16 @@
 ##          emissive disc) burns there and hits rats that stand in it.
 ## The telegraph and the fire patch are DangerZones (group "danger_zones")
 ## while they are live, so rats can see them coming.
+## Impacts are pooled Vfx bursts (scripts/vfx/vfx.gd): stomp = a ring of dust
+## puffs and a crack, club = an ink impact star, dust and a crack, broom = a
+## dust arc and straw flecks; every strike also sends a Vfx `disturbance`.
 class_name WeaponComponent
 extends Node3D
 
 const Props := preload("res://scripts/town_props.gd")
+const Vfx := preload("res://scripts/vfx/vfx.gd")
+## Crows scatter this far from a strike (Vfx.disturbance).
+const DISTURB_RADIUS := 4.0
 ## Segments of the broom arc outline.
 const ARC_SEGMENTS := 10
 ## Broom: rats this close to the wielder are swept whatever the angle.
@@ -139,15 +145,21 @@ func _strike() -> void:
 	_cooldown_left = weapon.cooldown
 	_free_ring()
 	var hits := 0
+	var tree := get_tree()
 	match weapon.kind:
 		&"broom":
 			hits = _sweep()
-			_arc_puff()
+			Vfx.play(tree, &"broom", _origin, _dir, weapon.radius, weapon.arc_deg)
 		&"torch":
 			_throw_fire()
+		&"club":
+			hits = _stomp()
+			Vfx.play(tree, &"club", _point, Vector3.ZERO, weapon.radius)
 		_:
 			hits = _stomp()
-			_puff()
+			Vfx.play(tree, &"stomp", _point, Vector3.ZERO, weapon.radius)
+	if weapon.kind != &"torch":
+		Vfx.disturb_at(tree, _point, DISTURB_RADIUS)
 	struck.emit(_point, hits)
 
 
@@ -303,69 +315,11 @@ func _sector_mesh(rad: float, deg: float) -> ArrayMesh:
 	return st.commit()
 
 
-## A flat ink shock ring and a few dust dots thrown outwards, fading fast.
-func _puff() -> void:
-	var puff := Node3D.new()
-	puff.name = "StompPuff"
-	puff.top_level = true
-	add_child(puff)
-	puff.global_transform = Transform3D(Basis(), _point)
-	var m := _fade_mat()
-	var ring := MeshInstance3D.new()
-	ring.mesh = _props.torus(weapon.radius * 0.7, 0.08)
-	ring.material_override = m
-	ring.position = Vector3(0, 0.13, 0)
-	ring.scale = Vector3(1, 0.25, 1)
-	puff.add_child(ring)
-	var tw := puff.create_tween().set_parallel(true)
-	tw.tween_property(ring, "scale", Vector3(1.6, 0.25, 1.6), 0.3).set_ease(Tween.EASE_OUT)
-	for i in 6:
-		var a := TAU * i / 6.0 + randf() * 0.5
-		var dot := MeshInstance3D.new()
-		dot.mesh = _props.sphere(0.09, 6)
-		dot.material_override = m
-		dot.position = Vector3(cos(a) * 0.3, 0.15, sin(a) * 0.3)
-		puff.add_child(dot)
-		var out := Vector3(cos(a), 0.0, sin(a)) * weapon.radius * 1.2 + Vector3(0, 0.35, 0)
-		tw.tween_property(dot, "position", out, 0.35).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
-		tw.tween_property(dot, "scale", Vector3.ONE * 0.4, 0.35)
-	tw.tween_property(m, "albedo_color:a", 0.0, 0.35).set_ease(Tween.EASE_IN)
-	tw.chain().tween_callback(puff.queue_free)
-
-
-## Broom swoosh: the arc's curved edge flung outwards and fading.
-func _arc_puff() -> void:
-	var puff := Node3D.new()
-	puff.name = "BroomPuff"
-	puff.top_level = true
-	add_child(puff)
-	puff.global_transform = Transform3D(Basis(Vector3.UP, atan2(_dir.x, _dir.z)), _origin)
-	var m := _fade_mat()
-	var half := deg_to_rad(weapon.arc_deg) * 0.5
-	var prev := Vector3.ZERO
-	for i in ARC_SEGMENTS + 1:
-		var a := lerpf(-half, half, float(i) / ARC_SEGMENTS)
-		var p := Vector3(sin(a), 0.0, cos(a)) * weapon.radius * 0.9 + Vector3(0, 0.15, 0)
-		if i > 0:
-			_props.strip(puff, prev, p, 0.12, Props.INK).material_override = m
-		prev = p
-	var tw := puff.create_tween().set_parallel(true)
-	tw.tween_property(puff, "scale", Vector3(1.35, 1.0, 1.35), 0.3).set_ease(Tween.EASE_OUT)
-	tw.tween_property(m, "albedo_color:a", 0.0, 0.3).set_ease(Tween.EASE_IN)
-	tw.chain().tween_callback(puff.queue_free)
-
-
-func _fade_mat() -> StandardMaterial3D:
-	var m := StandardMaterial3D.new()
-	m.albedo_color = Props.INK
-	m.roughness = 1.0
-	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	return m
-
-
-## The torch's fire: an AMBER emissive disc with a few flickering flames and an
-## ink rim. It burns `burn_time` s and calls `hit()` once on every rat that has
-## stood in it for more than `burn_delay` s without leaving.
+## The torch's fire: an AMBER emissive disc with an ink rim. Flickering amber
+## flame tongues and pale smoke rise off it from the Vfx pools (FLAME_RATE /
+## SMOKE_RATE a second), and it leaves a scorch mark when it goes out. It burns
+## `burn_time` s and calls `hit()` once on every rat that has stood in it for
+## more than `burn_delay` s without leaving.
 class FirePatch extends DangerZone:
 	var radius := 0.75
 	var burn_time := 3.0
@@ -374,7 +328,10 @@ class FirePatch extends DangerZone:
 	var _age := 0.0
 	var _inside := {}       # rat instance id -> seconds inside without leaving
 	var _burned := {}       # rat instance id -> true once hit
-	var _flames: Array[Node3D] = []
+	var _flame_left := 0.0
+	var _smoke_left := 0.1
+	const FLAME_RATE := 22.0
+	const SMOKE_RATE := 4.0
 
 	func setup(props: Props, r: float, time: float, delay: float) -> void:
 		_props = props
@@ -391,11 +348,6 @@ class FirePatch extends DangerZone:
 		_props.part(self, _props.cyl(radius, radius, 0.05, 20), Props.AMBER, Vector3(0, 0.08, 0), Vector3.ZERO,
 			Vector3.ONE, 2.5)
 		_props.part(self, _props.torus(radius, 0.07), Props.INK, Vector3(0, 0.1, 0), Vector3.ZERO, Vector3(1, 0.3, 1))
-		for i in 5:
-			var a := TAU * i / 5.0 + 0.4
-			var f := _props.node(self, Vector3(sin(a), 0.0, cos(a)) * radius * (0.25 + 0.4 * float(i % 2)))
-			_props.part(f, _props.cyl(0.0, 0.16, 0.5, 6), Props.AMBER, Vector3(0, 0.3, 0), Vector3.ZERO, Vector3.ONE, 3.0)
-			_flames.append(f)
 		var tw := create_tween()
 		scale = Vector3(0.3, 1.0, 0.3)
 		tw.tween_property(self, "scale", Vector3.ONE, 0.15).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
@@ -403,6 +355,7 @@ class FirePatch extends DangerZone:
 	func _physics_process(delta: float) -> void:
 		_age += delta
 		if _age >= burn_time:
+			Vfx.mark(get_tree(), &"scorch", global_position, randf() * TAU, radius * 1.1, 14.0)
 			retire()
 			return
 		danger_center = Vector3(global_position.x, 0.0, global_position.z)
@@ -424,12 +377,21 @@ class FirePatch extends DangerZone:
 			if not seen.has(id):
 				_inside.erase(id)
 
-	func _process(_delta: float) -> void:
-		for i in _flames.size():
-			var k := 0.75 + 0.35 * sin(_age * 17.0 + i * 2.1)
-			_flames[i].scale = Vector3(1.0, k, 1.0)
+	func _process(delta: float) -> void:
 		# Dies down over the last half second.
 		var left := burn_time - _age
+		var k := clampf(left / 0.5, 0.0, 1.0)
+		var tree := get_tree()
+		_flame_left -= delta * k
+		while _flame_left <= 0.0:
+			_flame_left += 1.0 / FLAME_RATE
+			var a := randf() * TAU
+			var at := global_position + Vector3(sin(a), 0.0, cos(a)) * radius * sqrt(randf()) * 0.85
+			Vfx.play(tree, &"flame", at, Vector3.ZERO, lerpf(0.5, 1.0, k))
+		_smoke_left -= delta * k
+		if _smoke_left <= 0.0:
+			_smoke_left += 1.0 / SMOKE_RATE
+			Vfx.play(tree, &"smoke", global_position + Vector3(randf_range(-0.3, 0.3), 0.0, randf_range(-0.3, 0.3)))
 		if left < 0.5:
 			var s := maxf(0.05, left / 0.5)
 			scale = Vector3(s, s, s)

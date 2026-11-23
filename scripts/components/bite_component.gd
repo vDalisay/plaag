@@ -5,10 +5,14 @@
 ## inside it: Hide, Raid) it Bites a random living occupant instead.
 ## While nothing is in range it only looks again every SCAN_INTERVAL seconds
 ## (performance: many Adults scanning every townsperson every frame).
+## Each street Bite sprays the Vfx "bite" burst (red droplets away from the
+## biter and an ink snap tick); a Bite inside a house shows on the house.
 class_name BiteComponent
 extends Node3D
 
 signal bit(target: Node3D)
+
+const Vfx := preload("res://scripts/vfx/vfx.gd")
 
 ## Seconds between scans while no target is in range (~10 Hz).
 const SCAN_INTERVAL := 0.1
@@ -44,6 +48,9 @@ func _physics_process(delta: float) -> void:
 	_cooldown_left = cooldown
 	if house:
 		house.show_bite()
+	else:
+		var away := target.global_position - global_position
+		Vfx.play(get_tree(), &"bite", target.global_position, away, chunk / 3.0)
 	bit.emit(target)
 
 

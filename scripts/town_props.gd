@@ -286,7 +286,8 @@ func house(parent: Node3D, pos: Vector3, rot_y: float, length: float, depth: flo
 					part(root, box(Vector3(l, 0.12, 0.12)), TIMBER,
 						Vector3(cx + s * (bw * 0.25 - 0.05), h1 + 0.25 + ph * 0.5, fz + 0.04),
 						Vector3(0, 0, ang * s))
-	roof(root, Vector3(0, top_y, j * 0.5), length + 0.7, depth + j + 0.7, opts.get("pitch", 38.0), roof_col)
+	roof(root, Vector3(0, top_y, j * 0.5), length + 0.7, depth + j + 0.7, opts.get("pitch", 38.0), roof_col,
+		opts.get("ridge_sag", 0.0))
 	if opts.has("lantern"):
 		wall_lantern(root, Vector3(opts["lantern"], minf(h1 - 0.7, 2.6), front1))
 	if opts.get("chimney", false):
@@ -301,7 +302,9 @@ func house(parent: Node3D, pos: Vector3, rot_y: float, length: float, depth: flo
 
 ## Gable roof with tile rows (shingle steps) on both slopes. `base` is the eave
 ## line centre; ridge along local X.
-func roof(parent: Node3D, base: Vector3, length: float, depth: float, pitch_deg: float, color: Color) -> void:
+## `sag` > 0 (opt-in) bows the ridge cap down by that much in the middle.
+func roof(parent: Node3D, base: Vector3, length: float, depth: float, pitch_deg: float, color: Color,
+		sag := 0.0) -> void:
 	var half := depth * 0.5
 	var rh := half * tan(deg_to_rad(pitch_deg))
 	var prism := PrismMesh.new()
@@ -327,7 +330,19 @@ func roof(parent: Node3D, base: Vector3, length: float, depth: float, pitch_deg:
 				_tile_colors.append(color)
 				x += 0.42
 	# Ridge cap and bargeboards.
-	part(parent, box(Vector3(length + 0.1, 0.22, 0.3)), color, base + Vector3(0, rh + 0.05, 0))
+	if sag <= 0.0:
+		part(parent, box(Vector3(length + 0.1, 0.22, 0.3)), color, base + Vector3(0, rh + 0.05, 0))
+	else:
+		var n_seg := 6
+		var cap := length + 0.1
+		for i in n_seg:
+			var xa := -cap * 0.5 + cap * i / n_seg
+			var xb := xa + cap / n_seg
+			var ya := -sag * sin(PI * float(i) / n_seg)
+			var yb := -sag * sin(PI * float(i + 1) / n_seg)
+			var seg := Vector2(xb - xa, yb - ya)
+			part(parent, box(Vector3(seg.length() + 0.04, 0.22, 0.3)), color,
+				base + Vector3((xa + xb) * 0.5, rh + 0.05 + (ya + yb) * 0.5, 0), Vector3(0, 0, rad_to_deg(seg.angle())))
 	for sx in [-1.0, 1.0]:
 		for s in [1.0, -1.0]:
 			part(parent, box(Vector3(0.12, 0.18, slope_len)), TIMBER,
@@ -619,3 +634,209 @@ func ground_dot(parent: Node3D, pos: Vector3, radius: float) -> void:
 
 func ground_ring(parent: Node3D, pos: Vector3, radius: float) -> void:
 	part(parent, torus(radius, 0.08), RED, pos + Vector3(0, 0.09, 0), Vector3.ZERO, Vector3(1, 0.3, 1), 0.6)
+
+
+# ---------------------------------------------------------------------- roof dressing
+# Opt-in extras for the game Districts (graphics pass): roof holes, patches,
+# moss, dormers, chimney pots. house() / roof() build exactly what they did
+# before unless asked (the `ridge_sag` opt). The demo may use them too.
+const SLATE := Color(0.66, 0.65, 0.62)
+## Manuscript azure: a slate roof washed blue (a sign of wealth).
+const AZURE := Color(0.22, 0.36, 0.66)
+const MOSS := Color(0.34, 0.56, 0.26)
+const WINDOW_LIGHT := 2.2
+
+
+## The roof a house(..., opts) call builds, in that house's local frame:
+## {"base": eave line centre, "length", "depth", "rise", "sag", "chimney":
+## the chimney cap top (NAN x without one)}.
+static func house_roof(length: float, depth: float, h1: float, h2: float, opts: Dictionary) -> Dictionary:
+	var stories: int = opts.get("stories", 2)
+	var j := 0.45 if stories == 2 else 0.0
+	var top_y := h1 + (h2 if stories == 2 else 0.0)
+	var d := depth + j + 0.7
+	var rise := d * 0.5 * tan(deg_to_rad(opts.get("pitch", 38.0)))
+	var chim := Vector3(NAN, 0, 0)
+	if opts.get("chimney", false):
+		chim = Vector3(length * 0.3, top_y + rise + 1.39, -0.3)
+	return {"base": Vector3(0, top_y, j * 0.5), "length": length + 0.7, "depth": d, "rise": rise,
+		"sag": float(opts.get("ridge_sag", 0.0)), "chimney": chim}
+
+
+## A frame on slope `s` (1: the slope towards local +Z, -1: the back one) of a
+## house_roof(), `f` of the way from the ridge (0) to the eave (1), `x` along
+## the ridge, `lift` off the slope. Basis: X along the ridge, Y out of the
+## slope, Z down it.
+static func roof_xf(roof: Dictionary, s: float, f: float, x: float, lift: float) -> Transform3D:
+	var half: float = roof["depth"] * 0.5
+	var rh: float = roof["rise"]
+	var sl := sqrt(half * half + rh * rh)
+	var nrm := Vector3(0, half, s * rh) / sl
+	var down := Vector3(0, -rh, s * half) / sl
+	var b := Basis(nrm.cross(down), nrm, down)
+	var base: Vector3 = roof["base"]
+	return Transform3D(b, base + Vector3(x, rh * (1.0 - f), s * f * half) + nrm * lift)
+
+
+## The ridge top at `x` (sag included), house-local.
+static func ridge_point(roof: Dictionary, x: float) -> Vector3:
+	var l: float = roof["length"]
+	var t := clampf((x + l * 0.5) / l, 0.0, 1.0)
+	var base: Vector3 = roof["base"]
+	return base + Vector3(x, float(roof["rise"]) + 0.16 - float(roof["sag"]) * sin(PI * t), 0)
+
+
+func part_xf(parent: Node3D, mesh: Mesh, color: Color, xf: Transform3D, emission_energy := 0.0) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.material_override = mat(color, emission_energy)
+	mi.transform = xf
+	parent.add_child(mi)
+	return mi
+
+
+## Dresses a house_roof(): opts "holes", "patches", "moss", "gaps" (single
+## missing tiles) (counts per roof, both slopes), "dormers" (front slope),
+## "dormer_side" (1: the slope towards local +Z, -1: the back one), "lit"
+## (chance a dormer window is lit), "color" (the roof colour, for loose
+## tiles). Draws from `rng` only.
+func roof_dressing(parent: Node3D, roof: Dictionary, opts: Dictionary, rng: RandomNumberGenerator) -> void:
+	var taken: Array[Vector4] = []   # (s, f, x, radius) of what is already on the roof
+	var col: Color = opts.get("color", WALL)
+	var l: float = roof["length"]
+	var n_dorm := int(opts.get("dormers", 0))
+	var dorm_s := float(opts.get("dormer_side", 1.0))
+	var dorm_parent := parent
+	if n_dorm > 0 and dorm_s < 0.0:
+		# The back slope: build as on the front, turned about the roof's centre line.
+		var base: Vector3 = roof["base"]
+		dorm_parent = node(parent, Vector3(0, 0, base.z * 2.0), 180.0)
+	for i in n_dorm:
+		var x := 0.0 if n_dorm == 1 else (-0.5 + float(i) / (n_dorm - 1)) * l * 0.45
+		x += rng.randf_range(-0.25, 0.25)
+		dormer(dorm_parent, roof, x, 0.5, col, rng.randf() < float(opts.get("lit", 0.5)))
+		taken.append(Vector4(dorm_s, 0.5, x * dorm_s, 1.0))
+	for kind: String in ["holes", "patches", "moss"]:
+		for i in int(opts.get(kind, 0)):
+			for attempt in 8:
+				var s := 1.0 if rng.randf() < 0.7 else -1.0
+				var f := rng.randf_range(0.25, 0.75)
+				if kind == "moss":
+					f = rng.randf_range(0.72, 0.9) if rng.randf() < 0.7 else rng.randf_range(0.12, 0.25)
+				var x := rng.randf_range(-l * 0.5 + 1.0, l * 0.5 - 1.0)
+				var r := 0.5 if kind == "moss" else 0.75
+				if not _roof_free(taken, s, f, x, r):
+					continue
+				taken.append(Vector4(s, f, x, r))
+				match kind:
+					"holes":
+						roof_hole(parent, roof, s, f, x, rng, col)
+					"patches":
+						roof_patch(parent, roof, s, f, x, rng, col)
+					_:
+						roof_moss(parent, roof, s, f, x, rng)
+				break
+	for i in int(opts.get("gaps", 0)):
+		var s := 1.0 if rng.randf() < 0.75 else -1.0
+		var f := rng.randf_range(0.15, 0.85)
+		var x := rng.randf_range(-l * 0.5 + 0.6, l * 0.5 - 0.6)
+		if _roof_free(taken, s, f, x, 0.2):
+			var b := Basis(Vector3.UP, deg_to_rad(rng.randf_range(-12, 12)))
+			part_xf(parent, box(Vector3(rng.randf_range(0.26, 0.4), 0.03, rng.randf_range(0.2, 0.3))), INK,
+				roof_xf(roof, s, f, x, 0.19) * Transform3D(b, Vector3.ZERO))
+
+
+static func _roof_free(taken: Array[Vector4], s: float, f: float, x: float, r: float) -> bool:
+	for t in taken:
+		if t.x == s and absf(t.z - x) < t.w + r and absf(t.y - f) < 0.3:
+			return false
+	return true
+
+
+## Missing tiles: a ragged black hole with the rafters and a batten showing,
+## and a couple of loose tiles below it.
+func roof_hole(parent: Node3D, roof: Dictionary, s: float, f: float, x: float, rng: RandomNumberGenerator,
+		tile_color: Color) -> void:
+	var xf := roof_xf(roof, s, f, x, 0.2)
+	var w := rng.randf_range(0.7, 1.2)
+	var h := rng.randf_range(0.55, 0.85)
+	part_xf(parent, box(Vector3(w, 0.03, h)), INK, xf)
+	# Ragged corners: smaller dark plates turned on the slope.
+	for k in 2:
+		var sgn := float(k * 2 - 1)
+		var off := Vector3(sgn * w * 0.4, 0.0, rng.randf_range(-0.2, 0.2) * h)
+		var b := Basis(Vector3.UP, deg_to_rad(rng.randf_range(20.0, 40.0) * sgn))
+		part_xf(parent, box(Vector3(w * 0.45, 0.03, h * 0.6)), INK, xf * Transform3D(b, off))
+	for k in 2:
+		var rx := (k - 0.5) * w * 0.5 + rng.randf_range(-0.05, 0.05)
+		part_xf(parent, box(Vector3(0.09, 0.07, h + 0.25)), WOOD, xf * Transform3D(Basis(), Vector3(rx, 0.05, 0)))
+	part_xf(parent, box(Vector3(w * 0.95, 0.05, 0.07)), WOOD,
+		xf * Transform3D(Basis(Vector3.UP, deg_to_rad(rng.randf_range(-6, 6))), Vector3(0, 0.1, rng.randf_range(-0.1, 0.15))))
+	for k in 2:
+		var b := Basis(Vector3.UP, deg_to_rad(rng.randf_range(-40, 40))) * Basis(Vector3.RIGHT, deg_to_rad(rng.randf_range(-12, 12)))
+		part_xf(parent, box(Vector3(0.3, 0.05, 0.22)), tile_color,
+			xf * Transform3D(b, Vector3(rng.randf_range(-w, w) * 0.5, 0.02, h * 0.5 + rng.randf_range(0.2, 0.5))))
+
+
+## A patch of new boards nailed over the tiles, a little askew.
+func roof_patch(parent: Node3D, roof: Dictionary, s: float, f: float, x: float, rng: RandomNumberGenerator,
+		tile_color: Color) -> void:
+	var col := WOOD if tile_color != WOOD else CLOTH
+	var xf := roof_xf(roof, s, f, x, 0.19) * Transform3D(Basis(Vector3.UP, deg_to_rad(rng.randf_range(-7, 7))), Vector3.ZERO)
+	var w := rng.randf_range(0.9, 1.4)
+	var h := rng.randf_range(0.6, 0.95)
+	part_xf(parent, box(Vector3(w, 0.05, h)), col, xf)
+	var n := rng.randi_range(2, 3)
+	for k in n:
+		var px := -w * 0.5 + w * (k + 1) / (n + 1)
+		part_xf(parent, box(Vector3(0.035, 0.035, h)), TIMBER, xf * Transform3D(Basis(), Vector3(px, 0.035, 0)))
+
+
+## A cushion of sage moss on the tiles.
+func roof_moss(parent: Node3D, roof: Dictionary, s: float, f: float, x: float, rng: RandomNumberGenerator) -> void:
+	var xf := roof_xf(roof, s, f, x, 0.13)
+	var blob := sphere(1.0, 8)
+	for k in rng.randi_range(3, 5):
+		var off := Vector3(rng.randf_range(-0.45, 0.45), 0.0, rng.randf_range(-0.18, 0.18))
+		var sc := Vector3(rng.randf_range(0.18, 0.34), 0.07, rng.randf_range(0.12, 0.22))
+		part_xf(parent, blob, MOSS, xf * Transform3D(Basis(Vector3.UP, rng.randf() * PI).scaled(sc), off))
+
+
+## A small gabled dormer with a window on the front slope (s = 1) at `x`.
+func dormer(parent: Node3D, roof: Dictionary, x: float, f: float, roof_color: Color, lit: bool) -> void:
+	var half: float = roof["depth"] * 0.5
+	var rh: float = roof["rise"]
+	var base: Vector3 = roof["base"]
+	var p := base + Vector3(x, rh * (1.0 - f), f * half)
+	var w := 1.15
+	var hh := 1.05
+	var dd := 1.5
+	var bot := p.y - 0.2
+	var hb := hh + 0.2
+	part(parent, box(Vector3(w, hb, dd)), WALL, Vector3(x, bot + hb * 0.5, p.z - dd * 0.5 + 0.02))
+	for sx: float in [-1.0, 1.0]:
+		part(parent, box(Vector3(0.1, hb, 0.1)), TIMBER, Vector3(x + sx * (w * 0.5 - 0.02), bot + hb * 0.5, p.z + 0.03))
+	var wy := p.y + 0.1 + hh * 0.42
+	part(parent, box(Vector3(0.62, 0.66, 0.08)), TIMBER, Vector3(x, wy, p.z + 0.05))
+	if lit:
+		part(parent, box(Vector3(0.46, 0.5, 0.08)), AMBER, Vector3(x, wy, p.z + 0.07), Vector3.ZERO, Vector3.ONE, WINDOW_LIGHT)
+	else:
+		part(parent, box(Vector3(0.46, 0.5, 0.08)), INK, Vector3(x, wy, p.z + 0.06))
+	part(parent, box(Vector3(0.05, 0.5, 0.05)), TIMBER, Vector3(x, wy, p.z + 0.12))
+	var top := bot + hb
+	var rr := 0.55
+	var prism := PrismMesh.new()
+	prism.size = Vector3(w + 0.34, rr, dd + 0.35)
+	part(parent, prism, roof_color, Vector3(x, top + rr * 0.5, p.z - dd * 0.5 + 0.18))
+	var zf := p.z + 0.36
+	for sx: float in [-1.0, 1.0]:
+		strip(parent, Vector3(x + sx * (w * 0.5 + 0.17), top, zf), Vector3(x, top + rr + 0.04, zf), 0.08, TIMBER)
+
+
+## Clay pots on a chimney cap (`top` = the cap's top centre).
+func chimney_pots(parent: Node3D, top: Vector3, n: int) -> void:
+	for k in n:
+		var x := 0.0 if n == 1 else (k - (n - 1) * 0.5) * 0.36
+		var h := 0.34 + 0.06 * k
+		part(parent, cyl(0.1, 0.13, h, 8), STONE, top + Vector3(x, h * 0.5, 0))
+		part(parent, cyl(0.125, 0.125, 0.05, 8), TIMBER, top + Vector3(x, h - 0.06, 0))

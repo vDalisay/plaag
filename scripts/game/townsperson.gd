@@ -15,10 +15,24 @@
 ## M7: with Contagion unlocked, the first person in a scene adds the scene's
 ## Contagion node (scripts/components/contagion.gd), which spreads the plague
 ## between outdoor townsfolk.
+## VFX pass (scripts/vfx/vfx.gd): a Bite makes the person shiver; the first
+## infection puffs a soft red ring at the chest; above FLIES_AT % flies orbit
+## the head; above COUGH_AT % a cough cloud (a pale puff with a red fleck)
+## every few seconds. A death outdoors raises ground dust as the body lands,
+## spreads a sepia blot under it and the flies settle on the corpse; eaten
+## clean, it leaves a splat. All pooled: no nodes per event.
 class_name Townsperson
 extends CharacterBody3D
 
 const Props := preload("res://scripts/town_props.gd")
+const Vfx := preload("res://scripts/vfx/vfx.gd")
+## Infection (%) above which flies circle the head, and the coughing starts.
+const FLIES_AT := 60.0
+const COUGH_AT := 85.0
+## Seconds a Bite's shiver lasts.
+const SHIVER_TIME := 0.22
+## The fallen body's middle, in the person's own frame (x flipped by the side it fell to).
+const BODY_MID := Vector3(-1.1, 0.0, 0.0)
 ## Cloak colour of a corpse: a dark sepia that the shader draws as heavy hatching,
 ## so corpses stay distinct from the solid-ink rats Feeding on them.
 const CORPSE_INK := Color(0.34, 0.29, 0.24)
@@ -90,6 +104,9 @@ var _stuck_check := 0.0
 var _stuck_from := Vector3.ZERO
 var _gait_time := 0.0
 var _cough_left := 0.0
+var _shiver_left := 0.0
+var _flies := false
+var _fall_side := 1.0
 var _dead := false
 var _mode := Mode.WANDER
 var _flee_left := 0.0
@@ -155,6 +172,7 @@ func _ready() -> void:
 	_infection.value_changed.connect(_on_infection_changed)
 	_infection.infected.connect(_on_infected)
 	_infection.died.connect(_on_died)
+	_infection.bitten.connect(_on_bitten)
 	_fear.band_changed.connect(_on_band_changed)
 	_weapon.struck.connect(_on_struck)
 	_probe.radius = 0.35
@@ -359,11 +377,11 @@ func _physics_process(delta: float) -> void:
 			return
 	else:
 		_act(delta, slow, sick)
-	if sick:
+	if sick and _infection.value >= COUGH_AT:
 		_cough_left -= delta
 		if _cough_left <= 0.0:
 			_cough()
-			_cough_left = _rng.randf_range(1.5, 4.0)
+			_cough_left = _rng.randf_range(2.0, 4.0)
 
 
 ## Starts, keeps or drops a walk to a door: FLEE runs into a nearby house, the
@@ -532,6 +550,11 @@ func _animate(delta: float, sick: bool, walking: bool) -> void:
 		lift = 0.0
 	_visual.rotation = Vector3(lean, 0.0, sway)
 	_visual.position.y = lift
+	if _shiver_left > 0.0:
+		_shiver_left = maxf(_shiver_left - delta, 0.0)
+		_visual.position.x = sin(_shiver_left * 95.0) * 0.05 * (_shiver_left / SHIVER_TIME)
+	elif _visual.position.x != 0.0:
+		_visual.position.x = 0.0
 	_arms_up = move_toward(_arms_up, 1.0 if _mode == Mode.FLEE else 0.0, delta * 6.0)
 	for i in _arm_pivots.size():
 		var s := -1.0 if i == 0 else 1.0
@@ -553,10 +576,20 @@ func _on_infection_changed(value: float) -> void:
 	# Clearly saturated by about 60 %, fully red from there on.
 	var t := smoothstep(0.0, 60.0, value)
 	_cloak_mat.albedo_color = _cloak_color.lerp(_sick_color, t)
+	if value >= FLIES_AT and not _flies and is_inside_tree():
+		_flies = true
+		Vfx.attach_to(get_tree(), &"flies", self)
 
 
 func _on_infected() -> void:
 	_cough_left = _rng.randf_range(0.5, 2.0)
+	if not is_indoors and is_inside_tree():
+		Vfx.play(get_tree(), &"infect", global_position)
+
+
+func _on_bitten(_chunk: float) -> void:
+	if not _dead and not is_indoors:
+		_shiver_left = SHIVER_TIME
 
 
 func _on_band_changed(band: int) -> void:
@@ -590,10 +623,30 @@ func _on_died() -> void:
 	_cloak_mat.albedo_color = CORPSE_INK
 	# Tip over sideways onto the ground; lift a little so the cloak doesn't sink in.
 	var side := 1.0 if _rng.randf() < 0.5 else -1.0
+	_fall_side = side
 	_visual.scale = Vector3.ONE
 	_death_tween = create_tween().set_parallel(true).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	_death_tween.tween_property(_visual, "rotation", Vector3(0.0, 0.0, side * PI * 0.5), 0.45)
 	_death_tween.tween_property(_visual, "position", Vector3(0.0, 0.42, 0.0), 0.45)
+	if is_indoors:
+		return
+	# The ground mark spreads under the body; the dust comes up as it lands.
+	_death_tween.tween_callback(_on_toppled).set_delay(0.4)
+	var mid := body_middle()
+	var v := Vfx.get_vfx(get_tree())
+	if v != null:
+		v.call("decal", &"blot", mid, rotation.y, 1.0, 45.0)
+		v.call("attach", &"corpse_flies", self, mid - global_position)
+
+
+## World point at the middle of the fallen body (the feet stay at the origin).
+func body_middle() -> Vector3:
+	var m := global_transform * Vector3(BODY_MID.x * _fall_side, 0.0, 0.0)
+	return Vector3(m.x, 0.0, m.z)
+
+
+func _on_toppled() -> void:
+	Vfx.play(get_tree(), &"topple", body_middle())
 
 
 func is_dead() -> bool:
@@ -623,37 +676,15 @@ func take_meal() -> bool:
 	return true
 
 
-## A flat ink stain under what's left of the body.
+## Eaten clean: a splat of remains (irregular blob and satellite drops).
 func _smear() -> void:
-	var stain := MeshInstance3D.new()
-	stain.name = "Smear"
-	stain.mesh = _props.cyl(0.8, 0.8, 0.02, 14)
-	stain.material_override = _props.mat(Props.INK)
-	stain.top_level = true
-	add_child(stain)
-	var b := Basis(Vector3.UP, rotation.y) * Basis.from_scale(Vector3(0.7, 1.0, 1.3))
-	stain.global_transform = Transform3D(b, Vector3(global_position.x, 0.03, global_position.z))
+	Vfx.play(get_tree(), &"corpse_splat", body_middle())
 
 
-## A small ink dot puffs out beside the face and fades away.
+## A cough cloud from the mouth: a pale puff with a red fleck, drifting forward.
 func _cough() -> void:
-	var dot := MeshInstance3D.new()
-	dot.mesh = _props.sphere(0.07, 6)
-	var m := StandardMaterial3D.new()
-	m.albedo_color = Props.INK
-	m.roughness = 1.0
-	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	dot.material_override = m
-	dot.top_level = true
-	add_child(dot)
-	var side := 1.0 if _rng.randf() < 0.5 else -1.0
-	var start := global_transform * Vector3(side * 0.35, 2.15, 0.35)
-	dot.global_position = start
-	var tw := dot.create_tween().set_parallel(true)
-	tw.tween_property(dot, "global_position", start + global_basis * Vector3(side * 0.5, 0.25, 0.4), 0.9)
-	tw.tween_property(dot, "scale", Vector3.ONE * 1.8, 0.9)
-	tw.tween_property(m, "albedo_color:a", 0.0, 0.9).set_ease(Tween.EASE_IN)
-	tw.chain().tween_callback(dot.queue_free)
+	var fwd := global_basis.z
+	Vfx.play(get_tree(), &"cough", global_transform * Vector3(0.0, 2.05, 0.35), fwd)
 
 
 # ------------------------------------------------------------------------ houses

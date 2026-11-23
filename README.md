@@ -34,9 +34,26 @@ Colony's stats.
 The shared UI look lives in [scripts/ui/ui_kit.gd](scripts/ui/ui_kit.gd):
 palette, fonts, buttons and input prompts that switch between keyboard and
 gamepad glyphs. Player settings (screen shake, damage numbers, reduce motion,
-HUD size, fullscreen) are kept in `user://plaag_settings.cfg`, apart from the
-Run save. The UX pass is specified in
+effects, HUD size, fullscreen) are kept in `user://plaag_settings.cfg`, apart
+from the Run save. The UX pass is specified in
 [docs/dev/ux_contract.md](docs/dev/ux_contract.md).
+
+Every event in a Round has a hand-drawn effect, from `scripts/vfx/`:
+- Bites spray red droplets.
+- The very sick draw flies and cough.
+- Rat deaths leave ink splats.
+- Stomps crack the ground.
+- A fallen house gets a red plague cross on its door.
+
+The world is dressed and kept alive by `scripts/world/`:
+- ground clutter, damaged or slate roofs, chimney smoke;
+- crows that scatter;
+- laundry and swinging signs;
+- a rust stain creeping in from the page edges as the District's Infection rises.
+
+All effects are pooled opaque geometry, so the parchment shader inks them. The
+Effects setting (Full / Reduced) halves them. See
+[docs/dev/vfx_contract.md](docs/dev/vfx_contract.md).
 
 | Action | Keyboard + mouse | Gamepad |
 | --- | --- | --- |
@@ -61,6 +78,14 @@ UI test flags:
 - `--reduce-motion` and `--no-numbers` override those settings for the session.
 - On the Upgrade Tree: `--dev-hover=<id>` and `--dev-zoom=<z>`.
 - On the title: `--settings-test`.
+
+Effects and world test flags:
+- `--vfx-test` plays every effect around the Lead Rat in a loop.
+- `--vfx-grid` shows them all at once.
+- `--no-vfx` turns them off.
+- `--effects=reduced` uses the Reduced setting.
+- `--stain=<0..1>` fixes the plague stain.
+- `--ambient-test` puts crows by the Lead Rat and scatters them.
 
 The full list is in the headers of
 [scripts/game/district.gd](scripts/game/district.gd) and the UI scripts.
@@ -146,6 +171,13 @@ All knobs are shader uniforms, grouped in the inspector:
   everything, ink included), `paper_mottle` / `paper_mottle_scale` for the
   plaster-like cell pattern, stains, `ink_speckle` for stray flecks, vignette,
   and `effect_mix` to fade the whole effect.
+* **Plague** — `plague_stain` (0..1) creeps a rust-brown wash in from the
+  screen edges with an ink tide line (one fbm sample, skipped at 0);
+  `plague_stain_color` sets its tint, and it multiplies, so blue and green
+  washes keep their hue. In a District it follows the Round Director's district
+  infection (`--stain=<0..1>` forces it). `glow_lift` (0..1) lifts lit amber
+  windows and lanterns towards warm paper so they read as light; the District
+  sets it to 0.8.
 
 Line width and hatch spacing are in screen pixels, so they stay the same size
 on screen regardless of zoom. If you render at a different resolution scale,

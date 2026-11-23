@@ -64,6 +64,8 @@ extends Node3D
 const Props := preload("res://scripts/town_props.gd")
 const Decor := preload("res://scripts/game/district_decor.gd")
 const FleasScript := preload("res://scripts/game/fleas.gd")
+const GroundScatter := preload("res://scripts/world/ground_scatter.gd")
+const AmbientScript := preload("res://scripts/world/ambient.gd")
 const YEAR_TABLE := "res://data/year_table.tres"
 const TOWNSPERSON_SCENE := "res://scenes/game/townsperson.tscn"
 const ROUND_DIRECTOR_SCRIPT := "res://scripts/game/round_director.gd"
@@ -151,15 +153,25 @@ var _facades: Array[Dictionary] = []
 var _well_pos := Vector3.INF
 var _fleas: Node3D
 var _decor_placed := {}
+## Graphics pass: its own RNG for the roof dressing, roof colours and signs
+## (never the layout RNG, so house positions and indices stay the same).
+var _look_rng := RandomNumberGenerator.new()
+## Hanging shop signs: [house root, pivot in its frame] (scripts/world/sway.gd).
+var _signs: Array = []
+## Crow perches on fences and walls: [a, b] world points.
+var _perch_lines: Array = []
+var _ambient: Node3D
 
 
 func _ready() -> void:
+	var t0 := Time.get_ticks_usec()
 	_apply_district_def()
 	visual_stage = _read_stage()
 	_setup_light()
 	_k = Props.new(layout_seed)
 	_cobble_kit = Props.new(layout_seed + 101)
 	_rng.seed = layout_seed
+	_look_rng.seed = layout_seed * 31 + 7
 	_collision = StaticBody3D.new()
 	_collision.name = "WorldCollision"
 	_collision.collision_layer = WORLD_LAYER
@@ -170,13 +182,19 @@ func _ready() -> void:
 	_decorate()
 	_k.flush(self)
 	_batch_meshes(keep)
+	var build_ms := (Time.get_ticks_usec() - t0) / 1000.0
 	_store_layout()
 	_apply_run_stats()
 	_add_round_director()
 	_add_hud()
 	_parse_debug_args()
+	var t1 := Time.get_ticks_usec()
+	_add_ambient()
+	build_ms += (Time.get_ticks_usec() - t1) / 1000.0
 	_setup_spawner()
 	_spawn_townsfolk()
+	if _print_stats or _perf:
+		print("district: built %s stage %d in %.0f ms" % [layout_style, visual_stage, build_ms])
 	if _print_stats:
 		_print_run_stats()
 		print(_spawner.counts_text())
@@ -351,11 +369,19 @@ func _row_house(row: Dictionary, cx: float, length: float) -> void:
 		"stories": stories,
 		"door_bay": _rng.randi_range(0, n_bays - 1),
 		"lit": lit,
-		"chimney": _rng.randf() < 0.25,
+		"chimney": _rng.randf() < 0.5,
 		"braces": _rng.randf() < 0.5,
 		"pitch": _rng.randf_range(28.0, 34.0) if low else _rng.randf_range(36.0, 46.0),
 	}
+	# Graphics pass: sagging ridges at the lower stages (own RNG).
+	var sag_roll := _look_rng.randf()
+	if visual_stage == 0 and sag_roll < 0.6:
+		opts["ridge_sag"] = 0.1 + sag_roll * 0.16
+	elif visual_stage == 1 and sag_roll < 0.3:
+		opts["ridge_sag"] = 0.07
 	var root := _k.house(self, pos, rot, length, depth, h1, h2, opts)
+	var roof := Props.house_roof(length, depth, h1, h2, opts)
+	_k.roof_dressing(root, roof, _slum_roof_look(opts["roof"]), _look_rng)
 	# The prop kit batches roof tile joints in world space; give each house
 	# its own batch under its root so the cutaway squashes them too.
 	_k.flush(root)
@@ -366,6 +392,7 @@ func _row_house(row: Dictionary, cx: float, length: float) -> void:
 	var j := 0.45 if stories == 2 else 0.0
 	var top := h1 + (h2 if stories == 2 else 0.0)
 	_add_house_body(root, pos, rot, length, depth, top, j, opts, n_bays)
+	_note_roof(root, roof)
 	if row["rot"] == 0.0:
 		var wins := _kit_windows(0.0, length, depth, h1, h2, stories, n_bays, opts["door_bay"], lit)
 		_add_facade(root, wins, length, depth, h1, j, n_bays, opts["door_bay"], false)
@@ -435,6 +462,8 @@ func _fence(x: float, z0: float, z1: float) -> void:
 	var n := maxi(2, int((z1 - z0) / 1.1) + 1)
 	for i in n:
 		var z := lerpf(z0, z1, float(i) / (n - 1))
+		if i % 2 == 1:
+			_perch_lines.append([Vector3(x, 1.3, z), Vector3(x, 1.3, z)])
 		var sag := FENCE_SAG[visual_stage]
 		_k.part(self, _k.box(Vector3(0.16, 1.3, 0.16)), Props.WOOD, Vector3(x, 0.65, z),
 			Vector3(_rng.randf_range(-4, 4) * sag, 0, _rng.randf_range(-4, 4) * sag))
@@ -490,6 +519,9 @@ func _decorate() -> void:
 	var decor := Decor.new(self, _k, visual_stage, layout_style, layout_seed * 7 + 3)
 	decor.build(_facades, _well_pos, streets, paved, drains, doors)
 	_decor_placed = decor.placed
+	var scatter := GroundScatter.new(self, _k, visual_stage, layout_style, layout_seed * 11 + 5)
+	scatter.build(_scatter_info(streets, paved, doors))
+	_decor_placed["ground"] = scatter.placed
 
 
 ## Window list of a Props.house() front (house-local, floor at `y0`):
@@ -546,6 +578,155 @@ func layout_entries() -> Array:
 
 func _store_layout() -> void:
 	Run.store_layout(district_id(), layout_entries())
+
+
+# ---------------------------------------------------------------------- graphics pass
+## Roof dressing of a slum house by stage: holes, patches and moss at stage 0,
+## repaired step by step (scripts/town_props.gd roof_dressing()).
+func _slum_roof_look(color: Color) -> Dictionary:
+	var r := _look_rng
+	var look := {"color": color}
+	match visual_stage:
+		0:
+			look["holes"] = (1 if r.randf() < 0.55 else 0) + (1 if r.randf() < 0.15 else 0)
+			look["patches"] = r.randi_range(0, 2)
+			look["moss"] = r.randi_range(1, 3)
+			look["gaps"] = r.randi_range(3, 7)
+		1:
+			look["holes"] = 1 if r.randf() < 0.12 else 0
+			look["patches"] = r.randi_range(1, 2)
+			look["moss"] = r.randi_range(0, 2)
+			look["gaps"] = r.randi_range(1, 3)
+		_:
+			look["patches"] = r.randi_range(0, 1)
+			look["moss"] = 1 if r.randf() < 0.3 else 0
+	return look
+
+
+## Roof dressing of a merchant's house: dormers, a little moss.
+func _merchant_roof_look(color: Color, length: float) -> Dictionary:
+	var r := _look_rng
+	var dormers := 0
+	if r.randf() < 0.55:
+		dormers = 2 if length > 6.4 else 1
+	return {"color": color, "dormers": dormers, "lit": 0.5,
+		"moss": 1 if visual_stage < 2 and r.randf() < 0.25 else 0,
+		"patches": 1 if visual_stage == 0 and r.randf() < 0.3 else 0}
+
+
+## Remembers the roof of the house just added (smoke, crows).
+func _note_roof(roof_root: Node3D, roof: Dictionary) -> void:
+	var h: Dictionary = _houses.back()
+	var l: float = roof["length"]
+	h["roof_root"] = roof_root
+	h["chimney"] = roof["chimney"]
+	h["ridge"] = [Props.ridge_point(roof, -l * 0.5 + 0.7), Props.ridge_point(roof, l * 0.5 - 0.7)]
+
+
+## An iron bracket on a facade (`at` = wall point, house frame) for a
+## hanging shop sign; the sign itself swings in scripts/world/sway.gd.
+func _sign_bracket(root: Node3D, at: Vector3) -> void:
+	_k.part(root, _k.box(Vector3(0.07, 0.07, 1.0)), Props.INK, at + Vector3(0, 0, 0.5))
+	_k.strip(root, at + Vector3(0, -0.55, 0.02), at + Vector3(0, -0.03, 0.6), 0.05, Props.INK)
+	_signs.append([root, at + Vector3(0, -0.04, 0.84)])
+
+
+## What the ground scatter needs (scripts/world/ground_scatter.gd).
+func _scatter_info(streets: Array[Rect2], paved: Array[Rect2], doors: Array[Vector3]) -> Dictionary:
+	var houses: Array = []
+	for h in _houses:
+		houses.append({"center": h["center"], "size": h["size"], "yaw": h["yaw"]})
+	var info := {"streets": streets, "paved": paved, "doors": doors, "gates": gate_points(), "houses": houses}
+	var x0 := bounds.position.x + 0.6
+	var x1 := bounds.end.x - 0.6
+	if layout_style == "merchant":
+		var sq := SQUARE_HALF + 0.2
+		var kerbs: Array = []
+		# Street edges just clear of the house fronts (z), and the x ranges left
+		# open (the square, the gate alleys).
+		for e: Array in [[-16.95, 2.5], [-8.2, sq], [-3.05, sq], [2.75, sq], [12.05, sq], [17.25, 2.5]]:
+			var z: float = e[0]
+			var gap: float = e[1]
+			kerbs.append([Vector3(x0, 0, z), Vector3(-gap, 0, z)])
+			kerbs.append([Vector3(gap, 0, z), Vector3(x1, 0, z)])
+		info["kerbs"] = kerbs
+		info["gutters"] = [Vector3(-12.6, x0, x1), Vector3(14.65, x0, x1),
+			Vector3(-0.15, x0, -sq - 0.3), Vector3(-0.15, sq + 0.3, x1)]
+		info["square"] = Rect2(-SQUARE_HALF, -8.4, SQUARE_HALF * 2.0, 19.8)
+	else:
+		info["ruts"] = [Vector3(-14.5 + 1.3, x0, x1), Vector3(0.0, x0, x1), Vector3(14.5 - 1.3, x0, x1)]
+		var fences: Array = []
+		for x: float in [bounds.position.x + 0.45, bounds.end.x - 0.45]:
+			for band in SLUM_STREETS:
+				fences.append([Vector3(x, 0, band.x), Vector3(x, 0, band.y)])
+		info["fences"] = fences
+	return info
+
+
+## Ambient life (scripts/world/ambient.gd): smoke, crows, laundry, signs,
+## ripples, lantern flicker, the plague stain and fallen houses.
+func _add_ambient() -> void:
+	var houses: Array = []
+	for h in _houses:
+		if not h.has("roof_root"):
+			continue
+		houses.append({"house": h["house"], "root": h["root"], "roof_root": h["roof_root"],
+			"chimney": h["chimney"], "ridge": h["ridge"]})
+	var water: Array = []
+	if _well_pos.is_finite():
+		if layout_style != "merchant" and visual_stage == 2:
+			water.append([_well_pos + Vector3(0, 0.69, 0), 1.6])   # the fountain basin and bowl
+			water.append([_well_pos + Vector3(0, 2.37, 0), 0.62])
+		else:
+			water.append([_well_pos + Vector3(0, 1.38, 0), 1.6])   # the dark well shaft
+	var overlay := _camera.get_node_or_null("ParchmentOverlay") as MeshInstance3D
+	var laundry := _laundry_lines() if layout_style != "merchant" else []
+	_decor_placed["ambient"] = {"chimneys": houses.filter(func(h: Dictionary) -> bool: return not is_nan((h["chimney"] as Vector3).x)).size(),
+		"laundry": laundry.size(), "signs": _signs.size(), "perches": _perch_lines.size(), "water": water.size()}
+	_ambient = AmbientScript.new()
+	_ambient.name = "Ambient"
+	add_child(_ambient)
+	_ambient.call("setup", _k, {
+		"style": layout_style,
+		"seed": layout_seed * 17 + visual_stage,
+		"bounds": bounds,
+		"houses": houses,
+		"perches": _perch_lines,
+		"laundry": laundry,
+		"signs": _signs,
+		"water": water,
+		"overlay": overlay.material_override as ShaderMaterial if overlay else null,
+	})
+	_ambient.call("collect_lanterns", self)
+
+
+## Laundry lines across the alleys between neighbouring slum houses of a row
+## (a gap of 1.5-4.8 u), near the fronts, under the eaves.
+func _laundry_lines() -> Array:
+	var out: Array = []
+	for a in _houses:
+		var ca: Vector2 = a["center"]
+		var sa: Vector2 = a["size"]
+		var right := ca.x + sa.x * 0.5
+		var best: Dictionary = {}
+		var best_gap := INF
+		for b in _houses:
+			var cb: Vector2 = b["center"]
+			var sb: Vector2 = b["size"]
+			if absf(cb.y - ca.y) > 1.0 or absf(angle_difference(deg_to_rad(float(a["yaw"])), deg_to_rad(float(b["yaw"])))) > 0.25:
+				continue
+			var gap := (cb.x - sb.x * 0.5) - right
+			if gap > 0.0 and gap < best_gap:
+				best_gap = gap
+				best = b
+		if best.is_empty() or best_gap < 1.5 or best_gap > 4.8 or _look_rng.randf() > 0.85:
+			continue
+		var cb2: Vector2 = best["center"]
+		var sb2: Vector2 = best["size"]
+		var facing := 1.0 if absf(angle_difference(deg_to_rad(float(a["yaw"])), 0.0)) < 0.5 else -1.0
+		var z := (ca.y + cb2.y) * 0.5 + facing * (minf(sa.y, sb2.y) * 0.5 - 0.8)
+		out.append([Vector3(right - 0.1, 2.45, z), Vector3(cb2.x - sb2.x * 0.5 + 0.1, 2.45, z)])
+	return out
 
 
 # ---------------------------------------------------------------------- merchant quarter
@@ -669,8 +850,14 @@ func _merchant_house(row: Dictionary, cx: float, length: float) -> void:
 		"braces": true,
 		"pitch": _rng.randf_range(44.0, 52.0),
 	}
+	# Graphics pass: slate roofs, about half of them washed azure (own RNG).
+	if _look_rng.randf() < 0.45:
+		opts["roof"] = Props.AZURE
+	elif opts["roof"] == Props.STONE:
+		opts["roof"] = Props.SLATE
 	var lantern := _rng.randf() < 0.6
 	var root: Node3D
+	var roof_root: Node3D
 	var top := h1 + h2
 	var bw := length / n_bays
 	var door_x := -length * 0.5 + (door_bay + 0.5) * bw
@@ -681,16 +868,31 @@ func _merchant_house(row: Dictionary, cx: float, length: float) -> void:
 		_shop_storey(root, length, depth, hg, n_bays, door_bay, lantern_x if lantern else NAN)
 		var upper := opts.duplicate()
 		upper["door_bay"] = -1   # every bay of the kit's ground floor gets a window
-		_k.house(root, Vector3(0, hg, 0), 0.0, length, depth, h1, h2, upper)
+		roof_root = _k.house(root, Vector3(0, hg, 0), 0.0, length, depth, h1, h2, upper)
 		top += hg
 	else:
 		if lantern:
 			opts["lantern"] = lantern_x
 		root = _k.house(self, pos, rot, length, depth, h1, h2, opts)
+		roof_root = root
+	var roof := Props.house_roof(length, depth, h1, h2, opts)
+	var look := _merchant_roof_look(opts["roof"], length)
+	look["dormer_side"] = 1.0 if rot0 == 0.0 else -1.0   # the slope the camera sees
+	_k.roof_dressing(roof_root, roof, look, _look_rng)
+	var chim: Vector3 = roof["chimney"]
+	if not is_nan(chim.x):
+		var pots := 1 + _look_rng.randi() % 2
+		_k.chimney_pots(roof_root, chim, pots)
+		roof["chimney"] = chim + Vector3(0, 0.42, 0)
+	if rot0 == 0.0 and _look_rng.randf() < 0.6:
+		var sx := -1.0 if door_x > 0.0 else 1.0
+		var sign_y := hg - 0.55 if storeys == 3 else h1 - 0.3
+		_sign_bracket(root, Vector3(sx * (length * 0.5 - 0.5), sign_y, depth * 0.5))
 	_k.flush(root)
 	var tiles := root.get_child(root.get_child_count() - 1) as Node3D
 	tiles.transform = root.global_transform.affine_inverse()
 	_add_house_body(root, pos, rot, length, depth, top, 0.45, opts, n_bays)
+	_note_roof(roof_root, roof)
 	if rot0 == 0.0:
 		var wins: Array
 		if storeys == 3:
@@ -795,6 +997,8 @@ func _stone_wall(pos: Vector3, length: float, rot_y: float) -> void:
 		var x := -length * 0.5 + (i + 0.5) * length / n
 		_k.part(root, _k.box(Vector3(length / n - 0.06, 0.16, 0.55)), Props.STONE, Vector3(x, 0.98, 0))
 	_add_box(Transform3D(Basis(Vector3.UP, deg_to_rad(rot_y)), pos), Vector3(length, 1.1, 0.5))
+	var along := Basis(Vector3.UP, deg_to_rad(rot_y)) * Vector3(length * 0.5 - 0.4, 0, 0)
+	_perch_lines.append([pos - along + Vector3(0, 1.06, 0), pos + along + Vector3(0, 1.06, 0)])
 
 
 ## Merges the prop kit's thousands of small parts (performance): each house

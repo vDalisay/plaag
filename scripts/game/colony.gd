@@ -31,6 +31,10 @@ signal changed                           # rat added/removed, Pup matured
 
 const RAT_SCENE := preload("res://scenes/game/colony_rat.tscn")
 const Props := preload("res://scripts/town_props.gd")
+const Vfx := preload("res://scripts/vfx/vfx.gd")
+## Run dust (VFX pass): one puff behind a running follower every this many s.
+const RUN_DUST_GAP := 0.09
+const RUN_DUST_SPEED := 3.0
 const WORLD_MASK := 1
 const CRUMB_STEP := 0.5
 const CRUMB_MAX := 160
@@ -151,6 +155,7 @@ var _lead_bite_age := INF
 var _danger_test := false
 var _danger_test_left := 1.5
 var _danger_test_n := 0
+var _dust_left := 0.0
 
 
 func _ready() -> void:
@@ -175,6 +180,7 @@ func _physics_process(delta: float) -> void:
 		_assign_swarm()
 	if _danger_test:
 		_update_danger_test(delta)
+	_update_run_dust(delta)
 	var lv: Vector3 = lead.get("velocity")
 	lv.y = 0.0
 	var speed := lv.length()
@@ -208,6 +214,23 @@ func _spawn_start() -> void:
 	_recount()
 
 
+## Sparse pale puffs behind the running swarm (unpaved ground only; the Vfx
+## node checks the ground and the Effects setting).
+func _update_run_dust(delta: float) -> void:
+	_dust_left -= delta
+	if _dust_left > 0.0 or _followers.is_empty():
+		return
+	_dust_left = RUN_DUST_GAP
+	var r := _followers[randi() % _followers.size()]
+	if not is_instance_valid(r) or bool(r.get("is_hidden")):
+		return
+	var vel: Vector3 = (r as CharacterBody3D).velocity
+	vel.y = 0.0
+	if vel.length() < RUN_DUST_SPEED:
+		return
+	Vfx.run_dust_at(get_tree(), r.global_position, vel, 0.7 if bool(r.get("is_pup")) else 1.0)
+
+
 ## Spawns a new Adult follower near `pos`.
 func spawn_adult(pos: Vector3) -> Node3D:
 	var r := _add_rat(false, pos, true)
@@ -220,6 +243,7 @@ func spawn_adult(pos: Vector3) -> Node3D:
 func spawn_pup(pos: Vector3) -> Node3D:
 	var r := _add_rat(true, pos, true)
 	births += 1
+	Vfx.play(get_tree(), &"pup_born", r.global_position)
 	_relayout()
 	_recount()
 	return r
@@ -688,6 +712,7 @@ func hide_in(h: House) -> void:
 	_hide_time = 0.0
 	_hide_full = not h.healthy_occupants().is_empty()
 	hidden_time_left = hide_duration * (1.0 if _hide_full else 0.5)
+	Vfx.play(get_tree(), &"door_dust", h.door_position, h.door_normal)
 	lead.call("hide_in", h)
 	for r in _followers:
 		if r.get("raiding") or r.get("is_hidden"):
@@ -712,6 +737,7 @@ func leave_house() -> void:
 	if h == null or not is_instance_valid(h):
 		return
 	var out := h.door_position + h.door_normal * 0.8
+	Vfx.play(get_tree(), &"door_dust", h.door_position, h.door_normal)
 	if lead.get("is_hidden"):
 		lead.call("pour_out", h, out)
 	var side := h.door_normal.cross(Vector3.UP)

@@ -9,6 +9,7 @@ class_name Cat
 extends CharacterBody3D
 
 const Props := preload("res://scripts/town_props.gd")
+const Vfx := preload("res://scripts/vfx/vfx.gd")
 const SCALE := 1.3
 const SPRINT := 7.0
 const FLEE_SPEED := 7.0
@@ -174,6 +175,8 @@ func _hunt(delta: float) -> void:
 	var to := _target.global_position - global_position
 	to.y = 0.0
 	if to.length() <= CATCH:
+		# The pounce lands: a puff of dust.
+		Vfx.play(get_tree(), &"cat_pounce", _target.global_position)
 		_target.call("hit")
 		kills += 1
 		_target = null

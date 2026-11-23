@@ -89,6 +89,16 @@ uniform float vignette_strength : hint_range(0.0, 1.0) = 0.35;
 // 0 shows the plain 3D render, 1 the full effect.
 uniform float effect_mix : hint_range(0.0, 1.0) = 1.0;
 
+group_uniforms Plague;
+// 0..1: a red-brown wash that blooms in from the page edges (the District's
+// Infection drives it). Noise-shaped, under the ink lines, and never inside
+// the central ~60% of the screen. 0 costs nothing.
+uniform float plague_stain : hint_range(0.0, 1.0) = 0.0;
+uniform vec3 plague_stain_color : source_color = vec3(0.62, 0.30, 0.20);
+// > 0: very bright glowing amber (lanterns) is washed paler the brighter it
+// renders, so an emission flicker shows. 0 = the old flat amber.
+uniform float glow_lift : hint_range(0.0, 1.0) = 0.0;
+
 // ---------------------------------------------------------------- noise helpers
 float hash21(vec2 p) {
 	vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -291,6 +301,24 @@ void fragment() {
 	vec3 base = mix(paper, accent * (0.75 + 0.25 * paper_t), accent_w * accent_opacity);
 	float tone = max(mid * 0.5, dark) * tone_strength * (1.0 - glow);
 	base = mix(base, base * parchment_dark / parchment_light, tone);
+	if (glow_lift > 0.0) {
+		float lift = glow * clamp((v - 1.62) * 3.5, 0.0, 1.0) * glow_lift;
+		base = mix(base, vec3(1.0, 0.93, 0.66), lift);
+	}
+	if (plague_stain > 0.001) {
+		// 0 at the centre, 1 at the screen edge (box distance, a little rounded).
+		vec2 c = abs(uv - 0.5) * 2.0;
+		float e = max(c.x, c.y) * 0.8 + length(c) * 0.14;
+		float n = fbm(auv * 2.3 + vec2(31.0, 17.0)) - 0.5;
+		float front = 1.0 - plague_stain * 0.42 + n * 0.3;
+		float wash = smoothstep(front, front + 0.07, e) * smoothstep(0.6, 0.7, e);
+		// Darker tide line where the wash ends, like dried watercolour.
+		float tide = wash * (1.0 - wash) * 4.0;
+		// Multiplied in like a stain soaking the page, so washes keep their hue.
+		vec3 tint = plague_stain_color * (1.25 + 0.2 * paper_t);
+		base *= mix(vec3(1.0), tint, wash * (0.32 + 0.18 * grain));
+		base = mix(base, base * vec3(0.72, 0.56, 0.48), tide * 0.45);
+	}
 	vec3 color = base;
 	color = mix(color, ink_color, hatch);
 	color = mix(color, ink_color, stipple * 0.7);

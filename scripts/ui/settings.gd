@@ -6,8 +6,8 @@
 ## grace period stops it flickering when a resting stick drifts.
 ##
 ## Everything reads these by property name; `changed` fires after any set().
-## Debug: --reduce-motion, --no-numbers and --pad force those for the session
-## (not saved), for screenshots.
+## Debug: --reduce-motion, --no-numbers, --pad and --effects=reduced|full
+## force those for the session (not saved), for screenshots.
 extends Node
 
 signal changed
@@ -30,6 +30,9 @@ var reduce_motion := false
 var fullscreen := false
 ## Scales the in-Round HUD (0.8 .. 1.4) on top of the window stretch.
 var hud_scale := 1.0
+## World effects (VFX pass): 1 = Full, 0 = Reduced (half the particles, no
+## flies, run dust or ambient mist).
+var effects_level := 1
 
 var last_device: int = Device.KEYBOARD_MOUSE
 
@@ -48,6 +51,10 @@ func _ready() -> void:
 		damage_numbers = false
 	if args.has("--pad"):
 		last_device = Device.GAMEPAD
+	for a in args:
+		if a.begins_with("--effects="):
+			effects_level = 0 if a.trim_prefix("--effects=") == "reduced" else 1
+			_session_overrides["effects_level"] = effects_level
 	_apply_window()
 
 
@@ -87,7 +94,7 @@ func set_value(key: String, value: Variant) -> void:
 
 func save_settings() -> void:
 	var cfg := ConfigFile.new()
-	for key in ["screen_shake", "damage_numbers", "reduce_motion", "fullscreen", "hud_scale"]:
+	for key in ["screen_shake", "damage_numbers", "reduce_motion", "fullscreen", "hud_scale", "effects_level"]:
 		cfg.set_value("settings", key, get(key))
 	cfg.save(PATH)
 
@@ -101,6 +108,7 @@ func load_settings() -> void:
 	reduce_motion = bool(cfg.get_value("settings", "reduce_motion", reduce_motion))
 	fullscreen = bool(cfg.get_value("settings", "fullscreen", fullscreen))
 	hud_scale = clampf(float(cfg.get_value("settings", "hud_scale", hud_scale)), 0.8, 1.4)
+	effects_level = clampi(int(cfg.get_value("settings", "effects_level", effects_level)), 0, 1)
 
 
 func _apply_window() -> void:

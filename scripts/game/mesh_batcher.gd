@@ -84,8 +84,47 @@ static func _add(mi: MeshInstance3D, xf: Transform3D, cell: float, groups: Dicti
 		var key := "%d|%d%s" % [mats[s].get_instance_id(), mi.cast_shadow, cell_key]
 		if not groups.has(key):
 			groups[key] = {"mat": mats[s], "shadow": mi.cast_shadow, "items": []}
-		(groups[key]["items"] as Array).append([mesh.surface_get_arrays(s), xf])
+		var pa := part_arrays(mesh, s)
+		(groups[key]["items"] as Array).append([pa[0], xf * (pa[1] as Transform3D)])
 	return true
+
+
+## Surface arrays of primitive meshes, shared by shape (see part_arrays()).
+static var _shapes := {}
+
+
+## [surface arrays, Transform3D] for a surface of `mesh`: the transform
+## takes the arrays to the mesh's own frame. Generating a primitive's arrays
+## costs ~0.4 ms each (and so does reading them back), so boxes and spheres
+## come from one cached unit shape scaled by the transform, and cylinders
+## are cached per exact shape.
+static func part_arrays(mesh: Mesh, surface: int) -> Array:
+	var box := mesh as BoxMesh
+	if box and box.subdivide_width == 0 and box.subdivide_height == 0 and box.subdivide_depth == 0:
+		return [_shape("box", func() -> PrimitiveMesh: return BoxMesh.new()), Transform3D(Basis.from_scale(box.size), Vector3.ZERO)]
+	var sph := mesh as SphereMesh
+	if sph and not sph.is_hemisphere and is_equal_approx(sph.height, sph.radius * 2.0):
+		var k := "sphere|%d|%d" % [sph.radial_segments, sph.rings]
+		var seg := sph.radial_segments
+		var rings := sph.rings
+		return [_shape(k, func() -> PrimitiveMesh:
+				var u := SphereMesh.new()
+				u.radial_segments = seg
+				u.rings = rings
+				return u), Transform3D(Basis.from_scale(Vector3.ONE * sph.radius * 2.0), Vector3.ZERO)]
+	var cyl := mesh as CylinderMesh
+	if cyl:
+		var k := "cyl|%s|%s|%s|%d|%d|%s|%s" % [cyl.top_radius, cyl.bottom_radius, cyl.height, cyl.radial_segments,
+			cyl.rings, cyl.cap_top, cyl.cap_bottom]
+		return [_shape(k, func() -> PrimitiveMesh: return cyl.duplicate() as PrimitiveMesh), Transform3D()]
+	return [mesh.surface_get_arrays(surface), Transform3D()]
+
+
+static func _shape(key: String, make: Callable) -> Array:
+	if not _shapes.has(key):
+		var m: PrimitiveMesh = make.call()
+		_shapes[key] = m.get_mesh_arrays()
+	return _shapes[key]
 
 
 ## One triangle surface from [surface arrays, transform] items.
