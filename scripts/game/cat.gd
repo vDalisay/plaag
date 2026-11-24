@@ -42,6 +42,7 @@ var _rng := RandomNumberGenerator.new()
 var _props: Props
 var _visual: Node3D
 var _tail: Node3D
+var _target_pos := Vector3.INF
 var _target: Node3D
 var _goal := Vector3.ZERO
 var _idle_left := 0.0
@@ -122,7 +123,7 @@ func _physics_process(delta: float) -> void:
 		mode = Mode.FLEE
 	elif _pause_left > 0.0:
 		mode = Mode.PAUSE
-	elif _target != null:
+	elif _target_pos != Vector3.INF:
 		mode = Mode.HUNT
 	else:
 		if mode != Mode.WANDER:
@@ -145,6 +146,15 @@ func _physics_process(delta: float) -> void:
 ## Counts the rats within CROWD_RANGE and picks the nearest one to hunt.
 func _scan() -> void:
 	var here := global_position
+	var col := get_tree().get_first_node_in_group("colony") as Colony
+	if col != null and col.has_method("query_crowd"):
+		var cq: Dictionary = col.query_crowd(here, CROWD_RANGE)
+		_crowd = int(cq["count"])
+		_crowd_centre = cq["centre"] as Vector3
+		var hq: Dictionary = col.query_crowd(here, HUNT_RANGE)
+		_target_pos = hq["nearest"] as Vector3 if int(hq["count"]) > 0 else Vector3.INF
+		_target = null
+		return
 	var c2 := CROWD_RANGE * CROWD_RANGE
 	var best_d := HUNT_RANGE * HUNT_RANGE
 	var best: Node3D = null
@@ -165,22 +175,31 @@ func _scan() -> void:
 			best = r
 	_crowd_centre = sum / float(_crowd) if _crowd > 0 else here
 	_target = best
+	_target_pos = best.global_position if best != null else Vector3.INF
 
 
 func _hunt(delta: float) -> void:
-	if not _target_ok():
-		_target = null
+	if _target != null and _target_ok():
+		_target_pos = _target.global_position
+	if _target_pos == Vector3.INF:
 		velocity = Vector3.ZERO
 		return
-	var to := _target.global_position - global_position
+	var to := _target_pos - global_position
 	to.y = 0.0
 	if to.length() <= CATCH:
-		# The pounce lands: a puff of dust.
-		Vfx.play(get_tree(), &"cat_pounce", _target.global_position)
-		_target.call("hit")
-		kills += 1
+		var col := get_tree().get_first_node_in_group("colony") as Colony
+		var hit_ok := false
+		if col != null and col.has_method("hit_one_rat_near"):
+			hit_ok = col.hit_one_rat_near(_target_pos, CATCH + 0.35)
+		elif _target != null and _target_ok():
+			_target.call("hit")
+			hit_ok = true
+		if hit_ok:
+			Vfx.play(get_tree(), &"cat_pounce", _target_pos)
+			kills += 1
+			_pause_left = PAUSE
 		_target = null
-		_pause_left = PAUSE
+		_target_pos = Vector3.INF
 		velocity = Vector3.ZERO
 		_face(to, 1.0)
 		return

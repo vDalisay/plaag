@@ -144,6 +144,10 @@ func _patients() -> Array[Node3D]:
 
 ## Mean position of the rats within `radius`, or Vector3.INF if none.
 func _rats_centre(radius: float) -> Vector3:
+	var col := get_tree().get_first_node_in_group("colony") as Colony
+	if col != null and col.has_method("query_crowd"):
+		var q: Dictionary = col.query_crowd(global_position, radius)
+		return q["centre"] as Vector3 if int(q["count"]) > 0 else Vector3.INF
 	var sum := Vector3.ZERO
 	var count := 0
 	for r in live_rats():
@@ -214,16 +218,21 @@ func _burst() -> int:
 	_incense_cd = incense_cooldown
 	_free_telegraph()
 	var n := 0
-	for r in live_rats():
-		if not DangerZone.circle_contains(_incense_at, incense_radius, r.global_position):
-			continue
-		if r.get("is_pup") == true and r.has_method("hit"):
-			r.call("hit")
-			n += 1
-		elif r.has_method("knockback"):
-			r.call("knockback", _incense_at, incense_knockback)
-			n += 1
+	var col := get_tree().get_first_node_in_group("colony") as Colony
+	if col != null and col.has_method("knockback_rats_in_circle"):
+		n = col.knockback_rats_in_circle(_incense_at, incense_radius, incense_knockback, true)
+	else:
+		for r in live_rats():
+			if not DangerZone.circle_contains(_incense_at, incense_radius, r.global_position):
+				continue
+			if r.get("is_pup") == true and r.has_method("hit"):
+				r.call("hit")
+				n += 1
+			elif r.has_method("knockback"):
+				r.call("knockback", _incense_at, incense_knockback)
+				n += 1
 	_cloud()
+	GameFeel.shake_camera(get_tree(), 0.2)
 	return n
 
 

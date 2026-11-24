@@ -63,11 +63,17 @@ func play(kind: StringName, pos: Vector3, dir: Vector3, scale: float, extra: flo
 	var flat := Vector3(dir.x, 0.0, dir.z)
 	flat = flat.normalized() if flat.length_squared() > 0.0001 else _rand_flat()
 	match kind:
-		&"bite": _bite(pos, flat, scale)
+		&"bite": _bite(pos, flat, scale, false)
+		&"lead_bite": _bite(pos, flat, scale, true)
 		&"infect": _infect(pos)
+		&"fever_wisp": _fever_wisp(pos, scale)
+		&"plague_death": _plague_death(pos)
+		&"bubo_burst": _bubo_burst(pos, scale)
+		&"cleanse_deflect": _cleanse_deflect(pos)
+		&"boss_break": _boss_break(pos)
 		&"cough": _cough(pos, flat)
-		&"topple": _dust_ring(pos, _n(6), 0.25, 1.4, Vector2(0.16, 0.24), 0.6)
-		&"blot": mark(&"blot", pos, randf() * TAU, 0.8 * scale, 45.0)
+		&"topple": _dust_ring(pos, _n(5), 0.2, 1.2, Vector2(0.14, 0.2), 0.5)
+		&"blot": mark(&"blot", pos, randf() * TAU, 0.58 * scale, 14.0)
 		&"corpse_splat": _corpse_splat(pos, scale)
 		&"rat_splat": _rat_splat(pos, scale)
 		&"lead_hurt": _lead_hurt(pos)
@@ -123,19 +129,83 @@ func mark(kind: StringName, pos: Vector3, rot: float, size: float, life: float, 
 
 
 # ---------------------------------------------------------------------- plague
-## 3-6 red droplets spraying on past the victim from its biter, and an ink
-## "snap": two tiny crossing strokes facing the camera.
-func _bite(pos: Vector3, away: Vector3, scale: float) -> void:
-	var o := Vector3(pos.x, 0.55, pos.z) - away * 0.2
-	var n := _n(clampi(3 + roundi(scale * 1.5), 3, 6))
+## Bite impact: vivid crimson spray + camera-readable fang slash ticks.
+## Lead Rat bites (`is_lead`) get a wider crimson-and-bone snap arc so attacks
+## feel crisp and unmistakable from the top-down camera.
+func _bite(pos: Vector3, away: Vector3, scale: float, is_lead := false) -> void:
+	var k := 1.45 if is_lead else 1.0
+	var o := Vector3(pos.x, 0.72, pos.z) - away * 0.25
+	var n := _n(clampi((6 if is_lead else 3) + roundi(scale * 1.4), 3, 9))
 	var side := away.cross(Vector3.UP)
 	for i in n:
-		var vel := away * randf_range(1.0, 2.2) + Vector3.UP * randf_range(1.2, 2.4) + side * randf_range(-0.9, 0.9)
-		_drop(o, vel, randf_range(0.07, 0.1) * clampf(0.8 + scale * 0.2, 0.8, 1.3), randf_range(0.45, 0.6), RED)
-	var tick := o + Vector3(0, 0.15, 0) - away * 0.1
+		var vel := away * randf_range(1.4, 3.0) * k + Vector3.UP * randf_range(1.4, 2.8) + side * randf_range(-1.2, 1.2)
+		_drop(o, vel, randf_range(0.08, 0.13) * clampf(0.85 + scale * 0.2, 0.85, 1.4) * (1.15 if is_lead else 1.0),
+			randf_range(0.38, 0.55), RED if i % 4 != 0 else RED_SOFT)
+	var tick := o + Vector3(0, 0.2, 0) - away * 0.08
+	# Crisp fang X-slash facing camera + forward bite crescent.
+	var r_vec: Vector3 = v.get("cam_right")
+	var u_vec: Vector3 = v.get("cam_up")
 	for s: float in [1.0, -1.0]:
-		var axis := (v.get("cam_right") as Vector3) * 0.7071 + (v.get("cam_up") as Vector3) * (0.7071 * s)
-		_se(tick, Vector3.ZERO, Vector3(0.035, 0.035, 0.3), 0.15, C.TICK, INK, 0.0, 0.0, axis)
+		var axis := (r_vec * 0.7071 + u_vec * (0.7071 * s)).normalized()
+		_se(tick, away * 0.6, Vector3(0.055, 0.055, 0.55) * k, 0.19, C.TICK, RED if is_lead else INK, 0.0, 2.0, axis)
+	if is_lead:
+		# Bone-white impact pop + crimson arc ticks so the Lead Rat's hit punches through dark streets.
+		_pe(tick, away * 0.35, Vector3.ONE * 0.26, 0.14, C.TICK, PALE, 0.0, 4.0)
+		for i in 3:
+			var ang := lerpf(-0.55, 0.55, float(i) / 2.0)
+			var dir := away.rotated(Vector3.UP, ang)
+			var tang := Vector3(-dir.z, 0.0, dir.x)
+			_se(o + dir * 0.35 + Vector3(0, 0.1, 0), dir * 2.2, Vector3(0.06, 0.04, 0.36), 0.18, C.DROP, RED, 0.0, 4.0, tang)
+
+
+## Rising dark-crimson miasma wisp on feverish/critical townsfolk.
+func _fever_wisp(pos: Vector3, scale: float) -> void:
+	var c := Vector3(pos.x, 1.2, pos.z) + _rand_flat() * 0.35
+	_puff(c, Vector3.UP * randf_range(0.8, 1.35) + _rand_flat() * 0.25,
+		randf_range(0.11, 0.18) * scale, randf_range(0.55, 0.8), RED if randf() < 0.55 else RED_SOFT, 0.0, 0.6)
+
+
+## Plague rupture climax when an infected person hits 100%.
+func _plague_death(pos: Vector3) -> void:
+	var c := Vector3(pos.x, 0.85, pos.z)
+	for i in _n(9):
+		var o := _rand_flat()
+		_drop(c, o * randf_range(1.4, 2.8) + Vector3.UP * randf_range(1.4, 2.6), randf_range(0.075, 0.12), 0.5,
+			RED if i % 3 != 0 else INK)
+	for i in _n(6):
+		var a := TAU * float(i) / 6.0 + randf() * 0.3
+		var o := Vector3(cos(a), 0.0, sin(a))
+		_puff(c + o * 0.2, o * randf_range(0.8, 1.4) + Vector3.UP * 0.4, randf_range(0.16, 0.24), 0.6, RED_SOFT, 0.0, 2.2)
+
+
+## Bubo Rupture keystone: wide crimson contagion explosion on death.
+func _bubo_burst(pos: Vector3, radius: float) -> void:
+	var c := Vector3(pos.x, 0.65, pos.z)
+	var n := _n(clampi(roundi(radius * 5.0), 12, 24))
+	for i in n:
+		var a := TAU * float(i) / float(n)
+		var o := Vector3(cos(a), 0.0, sin(a))
+		_puff(c + o * 0.3, o * (radius * 1.4) + Vector3.UP * 0.3, randf_range(0.22, 0.32), 0.65, RED if i % 2 == 0 else RED_SOFT, 0.0, 2.5)
+
+
+## Boss shrugging off weak solo bites (sage/parchment deflect sparks).
+func _cleanse_deflect(pos: Vector3) -> void:
+	var c := Vector3(pos.x, 1.15, pos.z)
+	for i in _n(4):
+		var o := _rand_flat()
+		_pe(c + o * 0.35, o * randf_range(1.2, 2.0) + Vector3.UP * 0.8, Vector3.ONE * 0.09, 0.38, C.DROP,
+			GREEN_SOFT if i % 2 == 0 else PALE, 1.5, 1.8)
+
+
+## Dramatic crimson break when the Colony overwhelms an Exterminator's Cleanse.
+func _boss_break(pos: Vector3) -> void:
+	var c := Vector3(pos.x, 1.1, pos.z)
+	_star(c, _n(10), 0.75, 0.32)
+	for i in _n(14):
+		var a := TAU * float(i) / 14.0
+		var o := Vector3(cos(a), 0.0, sin(a))
+		_puff(c + o * 0.35, o * 2.4 + Vector3.UP * randf_range(0.3, 1.0), randf_range(0.24, 0.36), 0.7,
+			RED if i % 2 == 0 else RED_SOFT, 0.0, 2.2)
 
 
 ## First infection: a soft red ring of puffs round the chest, swelling out.
@@ -192,9 +262,9 @@ func _ext_beaten(pos: Vector3) -> void:
 # ---------------------------------------------------------------------- deaths
 ## What's left of an eaten corpse: an irregular blob plus satellite drops.
 func _corpse_splat(pos: Vector3, scale: float) -> void:
-	mark(&"remains", pos, 0.0, 0.75 * scale, 40.0, 0.2)
+	mark(&"remains", pos, 0.0, 0.48 * scale, 10.0, 0.16)
 	for i in _n(3):
-		_drop(Vector3(pos.x, 0.25, pos.z), _rand_flat() * randf_range(1.0, 1.8) + Vector3.UP * 1.5, 0.06, 0.4, INK)
+		_drop(Vector3(pos.x, 0.22, pos.z), _rand_flat() * randf_range(0.9, 1.6) + Vector3.UP * 1.4, 0.05, 0.35, INK)
 
 
 ## A rat's death: radial ink droplets and an ink splat on the ground.

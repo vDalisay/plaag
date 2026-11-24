@@ -27,9 +27,10 @@ signal died
 const Props := preload("res://scripts/town_props.gd")
 const Vfx := preload("res://scripts/vfx/vfx.gd")
 ## Bite lunge: seconds out and back, and how far the body darts forward.
-const LUNGE_OUT := 0.07
+const LUNGE_OUT := 0.06
 const LUNGE_BACK := 0.16
-const LUNGE_REACH := 0.45
+const LUNGE_REACH := 0.62
+const LUNGE_HOP := 0.12
 ## Seconds to funnel into a door / pour back out of it.
 const FUNNEL_TIME := 0.3
 ## Seconds a knockback shove lasts (the speed eases off to 0 over it).
@@ -122,6 +123,7 @@ func _ready() -> void:
 	# One mesh per colour instead of nine parts (performance).
 	MeshBatcher.merge(_body)
 	_build_ring()
+	_bite.is_lead = true
 	_bite.bit.connect(_on_bit)
 	_bot_stuck_from = global_position
 	_layer = collision_layer
@@ -135,13 +137,35 @@ func _process(delta: float) -> void:
 		return
 	_lunge_t += delta
 	var z := 0.0
+	var y := 0.0
+	var scl := Vector3.ONE
 	if _lunge_t < LUNGE_OUT:
-		z = LUNGE_REACH * ease(_lunge_t / LUNGE_OUT, 0.5)
+		var t := ease(_lunge_t / LUNGE_OUT, 0.45)
+		z = LUNGE_REACH * t
+		y = sin(t * PI * 0.5) * LUNGE_HOP
+		scl = Vector3(lerpf(1.0, 0.80, t), lerpf(1.0, 0.86, t), lerpf(1.0, 1.36, t))
 	elif _lunge_t < LUNGE_OUT + LUNGE_BACK:
-		z = LUNGE_REACH * (1.0 - smoothstep(0.0, 1.0, (_lunge_t - LUNGE_OUT) / LUNGE_BACK))
+		var t := smoothstep(0.0, 1.0, (_lunge_t - LUNGE_OUT) / LUNGE_BACK)
+		z = LUNGE_REACH * (1.0 - t)
+		y = LUNGE_HOP * (1.0 - t)
+		scl = Vector3(lerpf(0.80, 1.0, t), lerpf(0.86, 1.0, t), lerpf(1.36, 1.0, t))
 	else:
 		_lunge_t = INF
-	_body.position = Vector3(0, 0, z)
+	_body.position = Vector3(0, y, z)
+	_body.scale = scl
+
+
+## Bite cooldown progress (0 = just bit, 1 = ready) for the diegetic HUD ring.
+func bite_cooldown_progress() -> float:
+	return _bite.cooldown_progress() if _bite else 1.0
+
+
+func bite_range_val() -> float:
+	return _bite.bite_range if _bite else 1.6
+
+
+func has_bite_target() -> bool:
+	return _bite != null and not is_hidden and not is_dead and _bite.find_target() != null
 
 
 func _physics_process(delta: float) -> void:
@@ -245,7 +269,7 @@ func _bot_direction(delta: float) -> Vector3:
 	return d.normalized()
 
 
-## Hit down to 1: run for the nearest door and walk into it.
+## Hit down to 1: run for the nearest door and deliberately trigger Hide.
 func _bot_hide_direction() -> Vector3:
 	var c := _get_colony()
 	if not _bot_want_hide or c == null or not c.can_hide():
@@ -258,8 +282,11 @@ func _bot_hide_direction() -> Vector3:
 	var door := _bot_hide_house.door_position
 	var front := door + _bot_hide_house.door_normal * 1.0
 	var here := Vector3(global_position.x, 0.0, global_position.z)
-	if here.distance_to(door) < 1.3 or here.distance_to(front) < 0.5:
-		return -_bot_hide_house.door_normal
+	if here.distance_to(door) <= 1.8:
+		c.try_hide()
+		return Vector3.ZERO
+	if here.distance_to(front) < 0.5:
+		return (door - here).normalized()
 	return (front - here).normalized()
 
 
@@ -370,8 +397,10 @@ func _on_bit(target: Node3D) -> void:
 	to.y = 0.0
 	if to.length_squared() > 0.0001:
 		_visual.rotation.y = atan2(to.x, to.z)
-	# Short forward lunge of the body and back (_process; no Tween per Bite).
+		GameFeel.punch_camera(get_tree(), to, 0.14)
+	# Short forward lunge with squash-stretch and crisp micro-hitstop.
 	_lunge_t = 0.0
+	GameFeel.hitstop(get_tree(), 0.028, 0.22, 0)
 
 
 # ---------------------------------------------------------------------- feeding
@@ -402,7 +431,9 @@ func _update_feeding(speed: float, delta: float) -> void:
 		_feed_left = c.feed_time
 		if Colony.take_meal(corpse):
 			_breed_left = c.breed_cooldown
-			c.spawn_pup(global_position)
+			var litter := 1 + c.extra_pups_per_feed
+			for _k in litter:
+				c.spawn_pup(global_position)
 
 
 # ---------------------------------------------------------------------- houses
@@ -471,6 +502,7 @@ func hit() -> void:
 		return
 	hits_left = maxi(hits_left - 1, 0)
 	_flash_ring()
+	GameFeel.flash(get_tree(), _visual, Color(1.0, 0.35, 0.26), 0.12)
 	if hits_left > 0:
 		Vfx.play(get_tree(), &"lead_hurt", global_position)
 	Vfx.disturb_at(get_tree(), global_position, 5.0)

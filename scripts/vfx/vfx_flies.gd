@@ -9,10 +9,11 @@ extends RefCounted
 
 enum Mode { HEAD, CORPSE }
 
-const MAX := 200
-const HEAD_Y := 2.35
-const CORPSE_Y := 0.7
-const FLY_SIZE := Vector3(0.2, 0.16, 0.25)
+const MAX := 120
+const HEAD_Y := 2.25
+const CORPSE_Y := 0.42
+## Tiny crisp darting ink motes instead of chunky spheres.
+const FLY_SIZE := Vector3(0.045, 0.03, 0.07)
 
 var enabled := true
 var _mm: MultiMesh
@@ -100,27 +101,18 @@ func update(dt: float) -> void:
 func _head_fly(c: Vector3, ph: float, k: int) -> Vector3:
 	var t := _time
 	var dir := 1.0 if k % 2 == 0 else -1.0
-	var a := t * (2.4 + 0.7 * float(k % 3)) * dir + ph
-	var r := 0.34 + 0.12 * sin(t * 4.7 + ph * 1.7) + 0.04 * sin(t * 29.0 + ph * 5.0)
-	var y := HEAD_Y + 0.13 * sin(t * 3.9 + ph * 2.3) + 0.05 * sin(t * 23.0 + ph)
+	var a := t * (3.2 + 0.8 * float(k % 3)) * dir + ph
+	var r := 0.22 + 0.08 * sin(t * 5.2 + ph * 1.7)
+	var y := HEAD_Y + 0.08 * sin(t * 4.4 + ph * 2.3)
 	return c + Vector3(cos(a) * r, y, sin(a) * r)
 
 
-## Mostly sitting on the body, crawling a little; now and then a hop up and
-## a quick circle before it lands again.
 func _corpse_fly(c: Vector3, ph: float, k: int) -> Vector3:
 	var t := _time
-	var cycle := fmod(t * 0.35 + ph * 0.21 + float(k) * 0.37, 1.0)
-	var spot := Vector3(cos(ph * 3.1) * 0.45, 0.0, sin(ph * 2.3) * 0.3)
-	var crawl := Vector3(sin(t * 0.9 + ph) * 0.06, 0.0, cos(t * 0.7 + ph) * 0.06)
-	if cycle < 0.72:
-		return c + spot + crawl + Vector3(0, CORPSE_Y, 0)
-	# Airborne for the rest of the cycle: up, round and back down.
-	var f := (cycle - 0.72) / 0.28
-	var a := f * TAU * 1.5 + ph
-	var lift := sin(f * PI) * 0.55
-	var r := sin(f * PI) * 0.35
-	return c + spot + Vector3(cos(a) * r, CORPSE_Y + lift + 0.04 * sin(t * 27.0 + ph), sin(a) * r)
+	var a := t * (2.6 + 0.6 * float(k % 3)) + ph
+	var r := 0.22 + 0.10 * sin(t * 3.1 + ph * 1.9)
+	var lift := 0.12 + 0.14 * absf(sin(t * 1.7 + ph))
+	return c + Vector3(cos(a) * r, CORPSE_Y + lift, sin(a) * r)
 
 
 ## Attachments (tests).

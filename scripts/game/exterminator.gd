@@ -65,6 +65,8 @@ func _ready() -> void:
 	# Lethality multiplies every base_rate as it enters the tree; a boss never
 	# sickens on its own (its scene says 0), only Bites push it up.
 	infection.value_changed.connect(_on_infection_changed)
+	infection.bitten.connect(_on_bitten)
+	infection.cleanse_broken.connect(_on_cleanse_broken)
 	infection.died.connect(_on_died)
 	_arrive_left = arrive_time
 	_gait = _rng.randf_range(0.0, 10.0)
@@ -108,10 +110,20 @@ func _physics_process(delta: float) -> void:
 	_animate(delta)
 
 
-## A slow bob while walking (subclasses may override).
+var _recoil_left := 0.0
+var _last_deflect_ms := -10000
+
+
 func _animate(_delta: float) -> void:
 	var speed := Vector2(velocity.x, velocity.z).length()
-	_visual.position.y = absf(sin(_gait * 7.0)) * 0.05 * minf(speed, 2.0)
+	var bob := absf(sin(_gait * 7.0)) * 0.05 * minf(speed, 2.0)
+	_visual.position.y = bob
+	if _recoil_left > 0.0:
+		_recoil_left = maxf(_recoil_left - _delta, 0.0)
+		var f := _recoil_left / 0.14
+		_visual.scale = Vector3(1.0 + 0.09 * f, 1.0 - 0.08 * f, 1.0 + 0.09 * f)
+	elif _visual.scale != Vector3.ONE:
+		_visual.scale = Vector3.ONE
 
 
 # ---------------------------------------------------------------------- queries
@@ -199,12 +211,43 @@ func tint_color(root: Node3D, color: Color, sick := Props.RED) -> void:
 	_sick = sick
 
 
+func _on_bitten(_chunk: float) -> void:
+	if is_beaten:
+		return
+	if infection.is_overwhelmed():
+		_recoil_left = 0.14
+		GameFeel.flash(get_tree(), _visual, Color(1.0, 0.45, 0.35), 0.08)
+	else:
+		# Rate-limited deflect feedback so the player sees why weak solo bites drain back.
+		var now := Time.get_ticks_msec()
+		if now - _last_deflect_ms >= 320:
+			_last_deflect_ms = now
+			GameFeel.flash(get_tree(), _visual, Color(0.68, 0.85, 0.62), 0.07)
+			Vfx.play(get_tree(), &"cleanse_deflect", global_position)
+
+
+func _on_cleanse_broken() -> void:
+	if is_beaten:
+		return
+	_recoil_left = 0.22
+	GameFeel.flash(get_tree(), _visual, Color(1.0, 0.22, 0.18), 0.16)
+	GameFeel.hitstop(get_tree(), 0.08, 0.08, 2)
+	GameFeel.shake_camera(get_tree(), 0.36)
+	Vfx.play(get_tree(), &"boss_break", global_position)
+
+
 func _on_infection_changed(value: float) -> void:
 	if is_beaten:
 		return
-	var t := smoothstep(0.0, 100.0, value) * 0.85
+	var t := smoothstep(0.0, 100.0, value) * 0.9
 	for i in _tint.size():
 		_tint[i].albedo_color = _tint_base[i].lerp(_sick, t)
+		if value >= 40.0:
+			_tint[i].emission_enabled = true
+			_tint[i].emission = _sick
+			_tint[i].emission_energy_multiplier = smoothstep(40.0, 100.0, value) * 0.55
+		else:
+			_tint[i].emission_enabled = false
 
 
 func _on_died() -> void:
@@ -219,6 +262,9 @@ func _on_died() -> void:
 	_shape.set_deferred("disabled", true)
 	for m in _tint:
 		m.albedo_color = CORPSE_INK
+		m.emission_enabled = false
+	GameFeel.hitstop(get_tree(), 0.13, 0.05, 3)
+	GameFeel.shake_camera(get_tree(), 0.55)
 	# Topples over; the tween keeps playing through the Round-end pause.
 	var side := 1.0 if _rng.randf() < 0.5 else -1.0
 	var tw := create_tween().set_pause_mode(Tween.TWEEN_PAUSE_PROCESS).set_parallel(true)

@@ -53,8 +53,8 @@ func _process(delta: float) -> void:
 
 ## One round of rolls; returns how many townsfolk were Bitten.
 func tick() -> int:
-	var adults := _adults()
-	if adults.is_empty():
+	var adult_pts := _adult_positions()
+	if adult_pts.is_empty():
 		return 0
 	var targets: Array[InfectionComponent] = []
 	var pos := PackedVector3Array()
@@ -69,8 +69,7 @@ func tick() -> int:
 		pos.append(t.global_position)
 	var r2 := radius * radius
 	var n_hit := 0
-	for a in adults:
-		var ap := a.global_position
+	for ap in adult_pts:
 		for i in targets.size():
 			var dx := pos[i].x - ap.x
 			var dz := pos[i].z - ap.z
@@ -84,22 +83,21 @@ func tick() -> int:
 	return n_hit
 
 
-## The Adults out in the street (group "rats": alive, not hidden).
-func _adults() -> Array[Node3D]:
-	var out: Array[Node3D] = []
+func _adult_positions() -> PackedVector3Array:
+	var out := PackedVector3Array()
 	if not sources.is_empty():
 		for s in sources:
 			if is_instance_valid(s):
-				out.append(s)
+				out.append(s.global_position)
 		return out
 	if colony == null:
 		return out
 	var lead := colony.get("lead") as Node3D
 	if lead and lead.is_in_group("rats"):
-		out.append(lead)
-	for r: Node3D in colony.call("followers"):
-		if is_instance_valid(r) and r.is_in_group("rats") and not bool(r.get("is_pup")):
-			out.append(r)
+		out.append(lead.global_position)
+	var sim: Variant = colony.get("sim")
+	if sim != null and sim.has_method("sample_adult_positions"):
+		out.append_array(sim.call("sample_adult_positions", 72))
 	return out
 
 

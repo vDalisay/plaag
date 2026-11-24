@@ -12,19 +12,20 @@
 class_name UiKit
 extends RefCounted
 
-const PARCHMENT := Color(0.93, 0.88, 0.76)
-const PARCHMENT_LIGHT := Color(0.97, 0.94, 0.86)
-const PARCHMENT_DARK := Color(0.84, 0.77, 0.62)
-## Translucent panel fill for HUD boxes over the world.
-const PANEL_FILL := Color(0.93, 0.88, 0.76, 0.88)
-const INK := Color(0.13, 0.10, 0.08)
-const SEPIA := Color(0.36, 0.25, 0.15)
-const INK_FADED := Color(0.13, 0.10, 0.08, 0.45)
-const RED := Color(0.72, 0.12, 0.10)
-const RED_DARK := Color(0.48, 0.07, 0.06)
-const AMBER := Color(0.85, 0.55, 0.12)
-## Text outline: a parchment halo so ink text reads over hatching.
-const OUTLINE := Color(0.95, 0.91, 0.80, 0.9)
+const PARCHMENT := Color(0.84, 0.78, 0.65)
+const PARCHMENT_LIGHT := Color(0.90, 0.85, 0.74)
+const PARCHMENT_DARK := Color(0.71, 0.64, 0.50)
+## Translucent panel fill for HUD boxes over the darker gothic world.
+const PANEL_FILL := Color(0.84, 0.78, 0.65, 0.90)
+const INK := Color(0.09, 0.07, 0.06)
+const SEPIA := Color(0.32, 0.22, 0.14)
+const INK_FADED := Color(0.09, 0.07, 0.06, 0.48)
+const RED := Color(0.76, 0.12, 0.10)
+const RED_DARK := Color(0.46, 0.06, 0.06)
+const AMBER := Color(0.88, 0.56, 0.14)
+const SAGE := Color(0.28, 0.48, 0.25)
+## Text outline: a weathered parchment halo so ink text reads over dark hatching.
+const OUTLINE := Color(0.89, 0.84, 0.72, 0.92)
 
 const SIZE_SMALL := 14
 const SIZE_BODY := 18
@@ -39,8 +40,8 @@ const DISPLAY_FONTS: Array[String] = ["Old English Text MT", "UnifrakturMaguntia
 const PAD_NAMES := {0: "A", 1: "B", 2: "X", 3: "Y", 4: "Back", 5: "Guide", 6: "Start",
 	7: "LS", 8: "RS", 9: "LB", 10: "RB", 11: "Up", 12: "Down", 13: "Left", 14: "Right"}
 ## Fallbacks when an action has no event of a kind (or doesn't exist).
-const KEY_FALLBACK := {"ui_accept": "Enter", "ui_cancel": "Esc", "pause": "Esc", "raid": "Click"}
-const PAD_FALLBACK := {"ui_accept": "A", "ui_cancel": "B", "pause": "Start", "raid": "A"}
+const KEY_FALLBACK := {"ui_accept": "Enter", "ui_cancel": "Esc", "pause": "Esc", "raid": "Click", "hide": "E"}
+const PAD_FALLBACK := {"ui_accept": "A", "ui_cancel": "B", "pause": "Start", "raid": "A", "hide": "X"}
 
 static var _body: Font
 static var _display: Font

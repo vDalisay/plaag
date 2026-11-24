@@ -21,13 +21,13 @@ extends Node3D
 
 const YEAR_TABLE := "res://data/year_table.tres"
 const CAT_SCENE := "res://scenes/game/cat.tscn"
-## Alive outdoor townsfolk above which nobody new spawns.
-const CAP := 45
+## Alive outdoor townsfolk above which nobody new spawns (scaled for expanded 68x68 maps & huge swarms).
+const CAP := 85
 ## Cats are not townsfolk; keep their number small on their own.
 const MAX_CATS := 4
-const LEAD_CLEARANCE := 6.0
-const INTERVAL_CALM := 9.0
-const INTERVAL_HUNTING := 1.5
+const LEAD_CLEARANCE := 7.0
+const INTERVAL_CALM := 6.5
+const INTERVAL_HUNTING := 1.0
 ## Vigilance at which the interval bottoms out.
 const INTERVAL_FULL_AT := 2.0
 ## Share of the starting population that gets a Year type (the rest plain).
@@ -220,6 +220,8 @@ func spawn_exterminator() -> Node3D:
 	var ext := scene.instantiate() as Node3D
 	ext.add_to_group("exterminator")
 	ext.position = gate
+	if district != null and district.get("bounds") is Rect2:
+		ext.set("wander_bounds", district.get("bounds"))
 	# Face into the District.
 	var c: Vector2 = (district.get("bounds") as Rect2).get_center() if district else Vector2.ZERO
 	ext.rotation.y = atan2(c.x - gate.x, c.y - gate.z)
@@ -388,11 +390,18 @@ func exterminator_text() -> String:
 		return ""
 	var inf := exterminator.get_node_or_null("Infection") as InfectionComponent
 	var p := exterminator.global_position
+	var col := get_tree().get_first_node_in_group("colony") as Colony
 	var near := 0
-	for r: Node in get_tree().get_nodes_in_group("rats"):
-		if r is Node3D and _flat_dist((r as Node3D).global_position, p) <= 1.6:
-			near += 1
+	var total := 0
+	if col != null and col.has_method("query_crowd"):
+		var q: Dictionary = col.query_crowd(p, 1.8)
+		near = int(q["count"])
+		total = col.adult_count + col.pup_count
+	else:
+		for r: Node in get_tree().get_nodes_in_group("rats"):
+			if r is Node3D and _flat_dist((r as Node3D).global_position, p) <= 1.6:
+				near += 1
+		total = get_tree().get_nodes_in_group("rats").size()
 	var lead_d := _flat_dist(_lead.global_position, p) if _lead and is_instance_valid(_lead) else -1.0
 	return " exterminator=%.0f%%%s lead_dist=%.1f rats_in_reach=%d/%d" % [
-		inf.value if inf else -1.0, " (dead)" if inf and inf.is_dead() else "", lead_d, near,
-		get_tree().get_nodes_in_group("rats").size()]
+		inf.value if inf else -1.0, " (dead)" if inf and inf.is_dead() else "", lead_d, near, total]

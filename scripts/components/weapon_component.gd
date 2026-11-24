@@ -66,9 +66,9 @@ func _physics_process(delta: float) -> void:
 	_cooldown_left = maxf(0.0, _cooldown_left - delta)
 	if not enabled or _cooldown_left > 0.0:
 		return
-	var target := _rat_in_reach()
-	if target != null:
-		_begin(target.global_position)
+	var target_pos := _rat_pos_in_reach()
+	if target_pos != Vector3.INF:
+		_begin(target_pos)
 
 
 func kind() -> StringName:
@@ -108,6 +108,21 @@ func cancel() -> void:
 	_windup_left = 0.0
 	_cooldown_left = weapon.cooldown * 0.5 if weapon else 0.0
 	_free_ring()
+
+
+func _colony() -> Colony:
+	return get_tree().get_first_node_in_group("colony") as Colony
+
+
+func _rat_pos_in_reach() -> Vector3:
+	var c := _colony()
+	if c != null and c.has_method("query_crowd"):
+		var q: Dictionary = c.query_crowd(global_position, weapon.reach)
+		if int(q["count"]) > 0:
+			return q["nearest"] as Vector3
+		return Vector3.INF
+	var r := _rat_in_reach()
+	return r.global_position if r != null else Vector3.INF
 
 
 func _rat_in_reach() -> Node3D:
@@ -155,9 +170,12 @@ func _strike() -> void:
 		&"club":
 			hits = _stomp()
 			Vfx.play(tree, &"club", _point, Vector3.ZERO, weapon.radius)
+			GameFeel.shake_camera(tree, 0.22)
 		_:
 			hits = _stomp()
 			Vfx.play(tree, &"stomp", _point, Vector3.ZERO, weapon.radius)
+			if hits > 0:
+				GameFeel.shake_camera(tree, 0.12)
 	if weapon.kind != &"torch":
 		Vfx.disturb_at(tree, _point, DISTURB_RADIUS)
 	struck.emit(_point, hits)
@@ -177,6 +195,9 @@ func _live_rats() -> Array[Node3D]:
 
 
 func _stomp() -> int:
+	var c := _colony()
+	if c != null and c.has_method("hit_rats_in_circle"):
+		return c.hit_rats_in_circle(_point, weapon.radius, weapon.kills_pups_only)
 	var hits := 0
 	for r in _live_rats():
 		if not is_instance_valid(r) or not r.has_method("hit"):
@@ -189,12 +210,14 @@ func _stomp() -> int:
 
 ## Broom: Pups in the arc die, Adults and the Lead Rat are shoved away.
 func _sweep() -> int:
-	var hits := 0
 	var half := deg_to_rad(weapon.arc_deg) * 0.5
+	var c := _colony()
+	if c != null and c.has_method("sweep_rats_in_arc"):
+		return c.sweep_rats_in_arc(_origin, _dir, weapon.radius, half, BROOM_FEET, weapon.knockback)
+	var hits := 0
 	for r in _live_rats():
 		if not is_instance_valid(r):
 			continue
-		# Right at the feet counts whatever the angle.
 		if not DangerZone.arc_contains(_origin, _dir, weapon.radius, half, BROOM_FEET, r.global_position):
 			continue
 		if r.get("is_pup") == true and r.has_method("hit"):
@@ -359,6 +382,10 @@ class FirePatch extends DangerZone:
 			retire()
 			return
 		danger_center = Vector3(global_position.x, 0.0, global_position.z)
+		var col := get_tree().get_first_node_in_group("colony") as Colony
+		if col != null and col.sim != null and _age >= burn_delay:
+			# SwarmSim rats standing in fire die cleanly via spatial query.
+			col.sim.hit_circle(danger_center, radius, false)
 		var seen := {}
 		for n: Node in get_tree().get_nodes_in_group("rats").duplicate():
 			var r := n as Node3D

@@ -14,4 +14,4 @@ cost_growth = 1.5
 requires = Array[String](["gorge", "hungry_pups"])
 level_values = Array[float]([0.2, 0.5, 0.7, 1.0])
 level_stat = "carry_over"
-tree_position = Vector2(0, -3.3)
+tree_position = Vector2(0, -4.9)

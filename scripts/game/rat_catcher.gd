@@ -46,6 +46,8 @@ var _telegraph: DangerZone
 var _fill: Node3D
 var _swing_left := 0.0       # follow-through animation after the strike
 var _trap_left := 3.0
+var _patrol_goal := Vector3.INF
+var _patrol_left := 0.0
 
 
 func _build() -> void:
@@ -115,6 +117,8 @@ func _on_arrived() -> void:
 	terrier = terrier_scene.instantiate() as Node3D
 	var side := global_basis.x * 0.9
 	terrier.position = flat(global_position + side)
+	if wander_bounds.has_area():
+		terrier.set("wander_bounds", wander_bounds)
 	get_parent().add_child(terrier)
 
 
@@ -138,8 +142,25 @@ func _think(delta: float) -> void:
 		begin_sweep(target.global_position)
 		return
 	if lead == null:
-		velocity = Vector3.ZERO
+		# Lead Rat is hidden: patrol away from the doorstep rather than camping it.
+		_patrol_left -= delta
+		if _patrol_goal == Vector3.INF or _patrol_left <= 0.0 or flat_dist(global_position, _patrol_goal) < 1.2:
+			_patrol_left = _rng.randf_range(3.5, 6.0)
+			var a := _rng.randf() * TAU
+			var r := _rng.randf_range(9.0, 15.0)
+			var p := flat(global_position) + Vector3(sin(a), 0.0, cos(a)) * r
+			if wander_bounds.has_area():
+				var b := wander_bounds.abs().grow(-2.0)
+				p.x = clampf(p.x, b.position.x, b.end.x)
+				p.z = clampf(p.z, b.position.y, b.end.y)
+			_patrol_goal = p
+		var away := flat(_patrol_goal - global_position)
+		if away.length() > 0.5:
+			walk(away.normalized(), walk_speed * 0.75, delta)
+		else:
+			velocity = Vector3.ZERO
 		return
+	_patrol_goal = Vector3.INF
 	var to := flat(lead.global_position - global_position)
 	if to.length() > stalk_distance:
 		walk(to.normalized(), walk_speed, delta)
@@ -187,14 +208,18 @@ func _strike() -> int:
 	_sweep_cd = sweep_cooldown
 	_swing_left = 0.35
 	_free_telegraph()
-	var hits := 0
 	var half := deg_to_rad(sweep_deg) * 0.5
-	for r in live_rats():
-		if not DangerZone.arc_contains(_sweep_origin, _sweep_dir, sweep_radius, half, SWEEP_FEET, r.global_position):
-			continue
-		if r.has_method("hit"):
-			r.call("hit")
-			hits += 1
+	var hits := 0
+	var col := get_tree().get_first_node_in_group("colony") as Colony
+	if col != null and col.has_method("hit_rats_in_arc"):
+		hits = col.hit_rats_in_arc(_sweep_origin, _sweep_dir, sweep_radius, half, SWEEP_FEET, false)
+	else:
+		for r in live_rats():
+			if not DangerZone.arc_contains(_sweep_origin, _sweep_dir, sweep_radius, half, SWEEP_FEET, r.global_position):
+				continue
+			if r.has_method("hit"):
+				r.call("hit")
+				hits += 1
 	_swoosh()
 	return hits
 
@@ -210,6 +235,7 @@ func _free_telegraph() -> void:
 func _swoosh() -> void:
 	Vfx.play(get_tree(), &"broom", _sweep_origin, _sweep_dir, sweep_radius, sweep_deg)
 	Vfx.disturb_at(get_tree(), _sweep_origin + _sweep_dir * sweep_radius * 0.5, 4.0)
+	GameFeel.shake_camera(get_tree(), 0.18)
 
 
 # ---------------------------------------------------------------------- traps
@@ -346,6 +372,11 @@ class SpringTrap extends DangerZone:
 			return
 		if not armed or sprung:
 			return
+		var col := get_tree().get_first_node_in_group("colony") as Colony
+		if col != null and col.has_method("hit_one_rat_near"):
+			if col.hit_one_rat_near(global_position, radius):
+				_snap()
+				return
 		for n: Node in get_tree().get_nodes_in_group("rats").duplicate():
 			var r := n as Node3D
 			if r == null or not is_instance_valid(r) or r.is_queued_for_deletion() or not r.has_method("hit"):

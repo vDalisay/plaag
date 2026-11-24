@@ -1,0 +1,18 @@
+[gd_resource type="Resource" script_class="UpgradeNodeDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/upgrade_node_def.gd" id="1_burst"]
+
+[resource]
+script = ExtResource("1_burst")
+id = "plague_burst"
+title = "Bubo Rupture"
+description = "Keystone: dying townsfolk rupture in a crimson miasma, infecting everyone nearby."
+max_level = 2
+cost_pestilence = 14
+cost_bones = 8
+cost_growth = 1.8
+requires = Array[String](["black_bile"])
+effects = {
+"plague_burst_radius": 3.5
+}
+tree_position = Vector2(-3.5, -1.6)

@@ -22,6 +22,6 @@ shape = SubResource("CapsuleShape3D_pd")
 [node name="Infection" type="Node" parent="."]
 script = ExtResource("2_inf")
 base_rate = 0.0
-gain_multiplier = 0.07
-cleanse_rate = 2.5
-bonus_decay = 0.4
+gain_multiplier = 0.11
+cleanse_rate = 2.4
+bonus_decay = 0.25

@@ -10,5 +10,5 @@ description = "Sharper incisors. The Colony Bites again sooner."
 max_level = 3
 cost_pestilence = 2
 effects = {
-"bite_cooldown": -0.1
+"bite_cooldown": -0.22
 }

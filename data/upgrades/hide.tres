@@ -6,7 +6,7 @@
 script = ExtResource("1_rgufa")
 id = "hide"
 title = "Hide"
-description = "Walk into a door and the whole Colony slips inside, out of sight."
+description = "Press E at a doorway to slip the whole Colony inside, out of sight."
 cost_pestilence = 3
 cost_bones = 2
 requires = Array[String](["gnaw"])

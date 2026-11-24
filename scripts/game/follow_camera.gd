@@ -9,27 +9,33 @@ extends Camera3D
 ## The node to follow; if empty, the first node in group "lead_rat".
 @export var target_path: NodePath
 @export var pitch_deg := 62.0
-@export var distance := 20.0
+@export var distance := 30.0
+## Extra zoom-out added smoothly as the Colony scales into hundreds/thousands.
+@export var max_swarm_zoom := 15.0
 @export var fov_deg := 45.0
 ## Follow stiffness (1/s): higher = tighter follow.
-@export var damping := 5.0
+@export var damping := 5.5
 ## District rectangle on the ground (x -> X, y -> Z).
-@export var bounds := Rect2(-22.0, -22.0, 44.0, 44.0)
+@export var bounds := Rect2(-34.0, -34.0, 68.0, 68.0)
 ## How far (units) the view may show past the bounds.
-@export var overshoot := 3.0
+@export var overshoot := 4.0
 ## Shake falls off at this rate (1/s) and wobbles at SHAKE_FREQ Hz.
 @export var shake_decay := 9.0
 const SHAKE_FREQ := 24.0
 
 var _target: Node3D
+var _colony: Node
 var _focus := Vector3.ZERO
 var _shake := 0.0
 var _shake_t := 0.0
+var _punch := Vector3.ZERO
+var _cur_distance := 30.0
 
 
 func _ready() -> void:
 	projection = PROJECTION_PERSPECTIVE
 	fov = fov_deg
+	_cur_distance = distance
 	rotation_degrees = Vector3(-pitch_deg, 0.0, 0.0)
 	_find_target()
 	if _target:
@@ -42,6 +48,8 @@ func _process(delta: float) -> void:
 		_find_target()
 		if _target == null:
 			return
+	var want_dist := _target_distance()
+	_cur_distance = lerpf(_cur_distance, want_dist, 1.0 - exp(-2.2 * delta))
 	var goal := _clamp_focus(_flat(_target.global_position))
 	_focus = _focus.lerp(goal, 1.0 - exp(-damping * delta))
 	if _shake > 0.001:
@@ -49,6 +57,10 @@ func _process(delta: float) -> void:
 		_shake_t += delta
 	else:
 		_shake = 0.0
+	if _punch.length_squared() > 0.0001:
+		_punch *= exp(-18.0 * delta)
+	else:
+		_punch = Vector3.ZERO
 	_place()
 
 
@@ -60,11 +72,38 @@ func shake(strength: float) -> void:
 	_shake = maxf(_shake, strength * k)
 
 
+## Directional recoil kick (Lead Rat Bite, heavy strikes), decays quickly.
+func punch(dir: Vector3, strength: float) -> void:
+	var k := UiKit.shake_scale()
+	if k <= 0.0:
+		return
+	var d := Vector3(dir.x, 0.0, dir.z)
+	if d.length_squared() < 0.0001:
+		return
+	_punch += d.normalized() * strength * k
+	if _punch.length() > 0.9:
+		_punch = _punch.normalized() * 0.9
+
+
 ## Snaps the view onto the target at once (after a respawn or teleport).
 func snap() -> void:
+	_cur_distance = _target_distance()
 	if _target:
 		_focus = _clamp_focus(_flat(_target.global_position))
 		_place()
+
+
+func _target_distance() -> float:
+	if _colony == null or not is_instance_valid(_colony):
+		_colony = get_tree().get_first_node_in_group("colony")
+	if _colony == null:
+		return distance
+	var adults: Variant = _colony.get("adult_count")
+	var pups: Variant = _colony.get("pup_count")
+	var total := (int(adults) if adults is int else 1) + (int(pups) if pups is int else 0)
+	# Smooth logarithmic zoom-out: 1..10 = base, 100 = +5.5u, 1000 = +11.5u, 2500+ = +max_swarm_zoom.
+	var t := clampf(log(maxf(float(total), 1.0) / 8.0) / log(300.0), 0.0, 1.0)
+	return distance + max_swarm_zoom * t
 
 
 func _find_target() -> void:
@@ -75,7 +114,7 @@ func _find_target() -> void:
 
 
 func _place() -> void:
-	global_position = _focus + global_transform.basis.z * distance
+	global_position = _focus + global_transform.basis.z * _cur_distance + _punch
 	if _shake > 0.0:
 		var t := _shake_t * SHAKE_FREQ
 		var b := global_transform.basis
@@ -94,9 +133,10 @@ func _clamp_focus(f: Vector3) -> Vector3:
 	var aspect := vp.x / maxf(vp.y, 1.0)
 	var half_v := deg_to_rad(fov_deg) * 0.5
 	var pitch := deg_to_rad(pitch_deg)
-	var height := distance * sin(pitch)
-	var back := distance * cos(pitch)
-	var half_w := distance * tan(half_v) * aspect
+	var dist := _cur_distance
+	var height := dist * sin(pitch)
+	var back := dist * cos(pitch)
+	var half_w := dist * tan(half_v) * aspect
 	var up_reach := height / tan(pitch - half_v) - back
 	var down_reach := back - height / tan(minf(pitch + half_v, PI * 0.5 - 0.001))
 	var lo_x := bounds.position.x + half_w - overshoot

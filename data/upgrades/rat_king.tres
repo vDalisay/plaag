@@ -13,7 +13,7 @@ cost_bones = 4
 cost_growth = 1.6
 requires = Array[String](["raid"])
 effects = {
-"raid_size": 1.0,
-"raid_cooldown": -1.5
+"raid_cooldown": -2.2,
+"raid_size": 4.0
 }
 tree_position = Vector2(0.0, 3.6)

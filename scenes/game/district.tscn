@@ -10,10 +10,10 @@
 
 [sub_resource type="Environment" id="Environment_main"]
 background_mode = 1
-background_color = Color(0.93, 0.88, 0.76, 1)
+background_color = Color(0.24, 0.22, 0.20, 1)
 ambient_light_source = 2
-ambient_light_color = Color(1, 1, 1, 1)
-ambient_light_energy = 0.4
+ambient_light_color = Color(0.62, 0.68, 0.78, 1)
+ambient_light_energy = 0.26
 tonemap_mode = 0
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_parchment"]
@@ -30,17 +30,18 @@ script = ExtResource("1_district")
 environment = SubResource("Environment_main")
 
 [node name="Sun" type="DirectionalLight3D" parent="."]
-light_energy = 1.2
+light_energy = 1.45
 shadow_enabled = true
 
 [node name="Camera3D" type="Camera3D" parent="."]
 current = true
 fov = 45.0
-far = 200.0
+far = 220.0
 script = ExtResource("4_camera")
 target_path = NodePath("../LeadRat")
-pitch_deg = 70.0
-distance = 26.0
+pitch_deg = 62.0
+distance = 30.0
+bounds = Rect2(-34, -34, 68, 68)
 
 [node name="ParchmentOverlay" type="MeshInstance3D" parent="Camera3D"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -1)

@@ -27,15 +27,18 @@ extends CharacterBody3D
 const Props := preload("res://scripts/town_props.gd")
 const Vfx := preload("res://scripts/vfx/vfx.gd")
 ## Infection (%) above which flies circle the head, and the coughing starts.
-const FLIES_AT := 60.0
-const COUGH_AT := 85.0
-## Seconds a Bite's shiver lasts.
-const SHIVER_TIME := 0.22
+const FLIES_AT := 75.0
+const COUGH_AT := 65.0
+## Seconds a Bite's shiver/recoil lasts.
+const SHIVER_TIME := 0.20
+## Uneaten corpse decays cleanly after this many seconds; max active corpses in street.
+const CORPSE_DECAY := 22.0
+const MAX_CORPSES := 20
 ## The fallen body's middle, in the person's own frame (x flipped by the side it fell to).
-const BODY_MID := Vector3(-1.1, 0.0, 0.0)
+const BODY_MID := Vector3(-0.75, 0.0, 0.0)
 ## Cloak colour of a corpse: a dark sepia that the shader draws as heavy hatching,
 ## so corpses stay distinct from the solid-ink rats Feeding on them.
-const CORPSE_INK := Color(0.34, 0.29, 0.24)
+const CORPSE_INK := Color(0.28, 0.24, 0.20)
 const SCALE := 1.1
 const FIGHT_SPEED := 2.2
 const UNEASY_SPEED := 1.8
@@ -104,10 +107,14 @@ var _stuck_check := 0.0
 var _stuck_from := Vector3.ZERO
 var _gait_time := 0.0
 var _cough_left := 0.0
+var _wisp_left := 0.0
+var _drip_left := 0.0
 var _shiver_left := 0.0
 var _flies := false
 var _fall_side := 1.0
 var _dead := false
+var _corpse_age := 0.0
+var _dissolving := false
 var _mode := Mode.WANDER
 var _flee_left := 0.0
 var _flee_dir := Vector3.ZERO
@@ -334,6 +341,10 @@ func _rig_arms(fig: Node3D) -> void:
 
 func _physics_process(delta: float) -> void:
 	if _dead:
+		if not is_indoors and not _dissolving:
+			_corpse_age += delta
+			if _corpse_age >= CORPSE_DECAY:
+				_dissolve()
 		return
 	if is_indoors:
 		_inside_left -= delta
@@ -341,7 +352,8 @@ func _physics_process(delta: float) -> void:
 			come_outside()
 		return
 	var sick := _infection.is_infected()
-	var slow := INFECTED_SPEED if sick else 1.0
+	var inf_val := _infection.value
+	var slow := lerpf(0.82, INFECTED_SPEED, clampf(inf_val / 75.0, 0.0, 1.0)) if sick else 1.0
 	_weapon.windup_multiplier = _windup_base * (INFECTED_WINDUP if sick else 1.0)
 	_flee_left = maxf(0.0, _flee_left - delta)
 	_slam_left = maxf(0.0, _slam_left - delta)
@@ -377,11 +389,35 @@ func _physics_process(delta: float) -> void:
 			return
 	else:
 		_act(delta, slow, sick)
-	if sick and _infection.value >= COUGH_AT:
+	if sick:
+		_update_sickness_fx(delta, inf_val)
+
+
+## Escalating visual sickness cues across Tiers 2-3 (31..99%): pulsing crimson
+## plague glow, rising fever wisps, heavier coughs and crimson ground drips.
+func _update_sickness_fx(delta: float, val: float) -> void:
+	if val >= 66.0 and _cloak_mat != null:
+		var crit := clampf((val - 66.0) / 34.0, 0.0, 1.0)
+		var pulse := 0.5 + 0.5 * sin(_gait_time * 4.5)
+		_cloak_mat.emission_enabled = true
+		_cloak_mat.emission = _sick_color
+		_cloak_mat.emission_energy_multiplier = lerpf(0.32, 0.95, crit) * (0.7 + 0.45 * pulse)
+	if val >= 31.0:
+		_wisp_left -= delta
+		if _wisp_left <= 0.0:
+			var intensity := clampf((val - 31.0) / 69.0, 0.15, 1.0)
+			_wisp_left = lerpf(1.6, 0.45, intensity) * _rng.randf_range(0.75, 1.25)
+			Vfx.play(get_tree(), &"fever_wisp", global_position, Vector3.ZERO, 0.7 + intensity * 0.6)
+	if val >= COUGH_AT:
 		_cough_left -= delta
 		if _cough_left <= 0.0:
 			_cough()
-			_cough_left = _rng.randf_range(2.0, 4.0)
+			_cough_left = _rng.randf_range(1.4, 2.8) if val >= 80.0 else _rng.randf_range(2.2, 3.8)
+	if val >= 68.0 and velocity.length_squared() > 0.25:
+		_drip_left -= delta
+		if _drip_left <= 0.0:
+			_drip_left = _rng.randf_range(0.9, 1.6)
+			Vfx.mark(get_tree(), &"drop", global_position, 0.0, 0.16, 6.0)
 
 
 ## Starts, keeps or drops a walk to a door: FLEE runs into a nearby house, the
@@ -454,12 +490,12 @@ func _fight(delta: float, slow: float, sick: bool) -> void:
 		_face(_weapon.strike_point() - global_position, delta * 10.0)
 		_animate(delta, sick, false)
 		return
-	var rat := _fear.nearest_rat()
-	if rat == null:
+	var rpos := _fear.nearest_rat_pos()
+	if rpos == Vector3.INF:
 		velocity = Vector3.ZERO
 		_animate(delta, sick, false)
 		return
-	var to := rat.global_position - global_position
+	var to := rpos - global_position
 	to.y = 0.0
 	if to.length() < _weapon.preferred_range():
 		velocity = Vector3.ZERO
@@ -472,8 +508,8 @@ func _fight(delta: float, slow: float, sick: bool) -> void:
 
 ## Keep about UNEASY_KEEP from the nearest rat, sidestepping around it.
 func _uneasy(delta: float, slow: float, sick: bool) -> void:
-	var rat := _fear.nearest_rat()
-	if rat == null:
+	var rpos := _fear.nearest_rat_pos()
+	if rpos == Vector3.INF:
 		velocity = Vector3.ZERO
 		_animate(delta, sick, false)
 		return
@@ -482,9 +518,9 @@ func _uneasy(delta: float, slow: float, sick: bool) -> void:
 		_side_left = _rng.randf_range(1.5, 3.0)
 		if _rng.randf() < 0.4:
 			_side = -_side
-	var away := rat.global_position.direction_to(global_position)
+	var away := rpos.direction_to(global_position)
 	away.y = 0.0
-	var d := Vector2(global_position.x - rat.global_position.x, global_position.z - rat.global_position.z).length()
+	var d := Vector2(global_position.x - rpos.x, global_position.z - rpos.z).length()
 	away = away.normalized() if away.length_squared() > 0.0001 else Vector3.FORWARD
 	var radial := clampf((UNEASY_KEEP - d) / 1.5, -0.6, 1.0)
 	var dir := away * radial + away.cross(Vector3.UP) * _side * 0.7
@@ -530,8 +566,9 @@ func _animate(delta: float, sick: bool, walking: bool) -> void:
 	var sway := 0.0
 	var lift := 0.0
 	if sick:
-		sway = sin(_gait_time * 2.0) * 0.13
-		lean = 0.08
+		var sev := clampf(_infection.value / 100.0, 0.1, 1.0)
+		sway = sin(_gait_time * (2.0 + sev * 1.4)) * (0.09 + 0.16 * sev)
+		lean = 0.08 + 0.24 * sev
 		lift = absf(sin(_gait_time * 2.0)) * 0.04 if walking else 0.0
 	else:
 		lift = absf(sin(_gait_time * 9.0)) * 0.05 if walking else 0.0
@@ -552,9 +589,14 @@ func _animate(delta: float, sick: bool, walking: bool) -> void:
 	_visual.position.y = lift
 	if _shiver_left > 0.0:
 		_shiver_left = maxf(_shiver_left - delta, 0.0)
-		_visual.position.x = sin(_shiver_left * 95.0) * 0.05 * (_shiver_left / SHIVER_TIME)
-	elif _visual.position.x != 0.0:
-		_visual.position.x = 0.0
+		var f := _shiver_left / SHIVER_TIME
+		_visual.position.x = sin(_shiver_left * 95.0) * 0.07 * f
+		_visual.scale = Vector3(1.0 + 0.14 * f, 1.0 - 0.12 * f, 1.0 + 0.14 * f)
+	else:
+		if _visual.position.x != 0.0:
+			_visual.position.x = 0.0
+		if _visual.scale != Vector3.ONE:
+			_visual.scale = Vector3.ONE
 	_arms_up = move_toward(_arms_up, 1.0 if _mode == Mode.FLEE else 0.0, delta * 6.0)
 	for i in _arm_pivots.size():
 		var s := -1.0 if i == 0 else 1.0
@@ -573,16 +615,23 @@ func _pick_target() -> void:
 func _on_infection_changed(value: float) -> void:
 	if _dead:
 		return
-	# Clearly saturated by about 60 %, fully red from there on.
-	var t := smoothstep(0.0, 60.0, value)
+	# Escalating progression across 0..100%: soft crimson tint -> deep scarlet -> glowing plague red.
+	var t := smoothstep(0.0, 75.0, value)
 	_cloak_mat.albedo_color = _cloak_color.lerp(_sick_color, t)
+	if value >= 31.0 and value < 66.0:
+		_cloak_mat.emission_enabled = true
+		_cloak_mat.emission = _sick_color
+		_cloak_mat.emission_energy_multiplier = smoothstep(31.0, 66.0, value) * 0.32
+	elif value < 31.0:
+		_cloak_mat.emission_enabled = false
 	if value >= FLIES_AT and not _flies and is_inside_tree():
 		_flies = true
 		Vfx.attach_to(get_tree(), &"flies", self)
 
 
 func _on_infected() -> void:
-	_cough_left = _rng.randf_range(0.5, 2.0)
+	_cough_left = _rng.randf_range(0.4, 1.5)
+	_wisp_left = _rng.randf_range(0.2, 0.8)
 	if not is_indoors and is_inside_tree():
 		Vfx.play(get_tree(), &"infect", global_position)
 
@@ -590,6 +639,7 @@ func _on_infected() -> void:
 func _on_bitten(_chunk: float) -> void:
 	if not _dead and not is_indoors:
 		_shiver_left = SHIVER_TIME
+		GameFeel.flash(get_tree(), _visual, Color(1.0, 0.84, 0.78), 0.085)
 
 
 func _on_band_changed(band: int) -> void:
@@ -603,13 +653,19 @@ func _on_struck(_point: Vector3, _hits: int) -> void:
 
 func _on_died() -> void:
 	_dead = true
+	_corpse_age = 0.0
 	_cancel_going()
 	remove_from_group("townsfolk")
 	remove_from_group("indoors")
+	var bonus_meals := 0
+	var run := get_node_or_null("/root/Run")
+	if run != null and run.has_method("stat"):
+		bonus_meals = int(round(float(run.call("stat", "corpse_meals"))))
+	meals_left = MEALS + maxi(0, bonus_meals)
 	# Indoors the body stays hidden inside the house: no corpse to Feed on.
 	if not is_indoors:
 		add_to_group("corpses")
-	meals_left = MEALS
+		_prune_old_corpses()
 	_weapon.cancel()
 	_weapon.enabled = false
 	_weapon.set_physics_process(false)
@@ -621,22 +677,72 @@ func _on_died() -> void:
 	collision_mask = 0
 	_shape.set_deferred("disabled", true)
 	_cloak_mat.albedo_color = CORPSE_INK
-	# Tip over sideways onto the ground; lift a little so the cloak doesn't sink in.
+	_cloak_mat.emission_enabled = false
+	# Compact slumped fall (smaller horizontal footprint so streets stay clean).
 	var side := 1.0 if _rng.randf() < 0.5 else -1.0
 	_fall_side = side
 	_visual.scale = Vector3.ONE
 	_death_tween = create_tween().set_parallel(true).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-	_death_tween.tween_property(_visual, "rotation", Vector3(0.0, 0.0, side * PI * 0.5), 0.45)
-	_death_tween.tween_property(_visual, "position", Vector3(0.0, 0.42, 0.0), 0.45)
+	_death_tween.tween_property(_visual, "rotation", Vector3(0.0, 0.0, side * PI * 0.5), 0.36)
+	_death_tween.tween_property(_visual, "position", Vector3(0.0, 0.28, 0.0), 0.36)
+	_death_tween.tween_property(_visual, "scale", Vector3(0.62, 0.68, 0.72), 0.36)
 	if is_indoors:
 		return
-	# The ground mark spreads under the body; the dust comes up as it lands.
-	_death_tween.tween_callback(_on_toppled).set_delay(0.4)
+	# Satisfying plague rupture burst on death + compact ground mark.
+	Vfx.play(get_tree(), &"plague_death", global_position)
+	_trigger_death_upgrades(run)
+	_death_tween.tween_callback(_on_toppled).set_delay(0.32)
 	var mid := body_middle()
 	var v := Vfx.get_vfx(get_tree())
 	if v != null:
-		v.call("decal", &"blot", mid, rotation.y, 1.0, 45.0)
+		v.call("decal", &"blot", mid, rotation.y, 0.58, 14.0)
 		v.call("attach", &"corpse_flies", self, mid - global_position)
+
+
+## Keystone hooks on outdoor death: Bubo Rupture (splash Infection) & Carrion Tide (instant Pups).
+func _trigger_death_upgrades(run: Node) -> void:
+	if run == null or not run.has_method("stat"):
+		return
+	var burst_r := float(run.call("stat", "plague_burst_radius"))
+	if burst_r > 0.1:
+		var r2 := burst_r * burst_r
+		Vfx.play(get_tree(), &"bubo_burst", global_position, Vector3.ZERO, burst_r)
+		for n: Node in get_tree().get_nodes_in_group("townsfolk"):
+			var other := n as Node3D
+			if other == null or other == self or other.is_in_group("exterminator"):
+				continue
+			var d := other.global_position - global_position
+			if d.x * d.x + d.z * d.z <= r2:
+				var inf := other.get_node_or_null("Infection") as InfectionComponent
+				if inf != null and not inf.is_dead():
+					inf.bite(12.0, 1.5)
+	var death_pups := int(round(float(run.call("stat", "death_pups"))))
+	if death_pups > 0:
+		var col := get_tree().get_first_node_in_group("colony")
+		if col != null and col.has_method("spawn_pup"):
+			var lead_p := col.call("lead_position") as Vector3 if col.has_method("lead_position") else global_position
+			if Vector2(global_position.x - lead_p.x, global_position.z - lead_p.z).length() <= 14.0:
+				for i in death_pups:
+					col.call("spawn_pup", global_position)
+
+
+## Keeps active outdoor corpses bounded so streets never turn into clutter.
+func _prune_old_corpses() -> void:
+	var all := get_tree().get_nodes_in_group("corpses")
+	if all.size() <= MAX_CORPSES:
+		return
+	var oldest: Node = null
+	var max_age := -1.0
+	for n in all:
+		if n == self or not is_instance_valid(n):
+			continue
+		var a: Variant = n.get("_corpse_age")
+		var age := float(a) if (a is float or a is int) else 999.0
+		if age > max_age:
+			max_age = age
+			oldest = n
+	if oldest != null and oldest.has_method("_dissolve"):
+		oldest.call("_dissolve")
 
 
 ## World point at the middle of the fallen body (the feet stay at the origin).
@@ -654,8 +760,7 @@ func is_dead() -> bool:
 
 
 ## A rat Feeds on this corpse. Returns false if alive or already picked clean.
-## Each meal flattens the body a little; the last leaves a flat ink smear that
-## is no longer in group "corpses".
+## Each meal shrinks the body; the last leaves a brief mark and frees the node.
 func take_meal() -> bool:
 	if not _dead or meals_left <= 0:
 		return false
@@ -663,17 +768,30 @@ func take_meal() -> bool:
 	if _death_tween and _death_tween.is_valid():
 		_death_tween.custom_step(10.0)   # finish the topple at once
 		_death_tween.kill()
-	var eaten := float(MEALS - meals_left) / float(MEALS)
-	# Lying on its side, the visual's local X is the world's vertical.
-	var flat := lerpf(1.0, 0.2, eaten)
-	var thin := lerpf(1.0, 0.85, eaten)
+	var total_meals := maxi(1, MEALS)
+	var eaten := clampf(1.0 - float(meals_left) / float(total_meals), 0.0, 1.0)
+	var s := lerpf(0.66, 0.25, eaten)
 	var tw := create_tween().set_parallel(true).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	tw.tween_property(_visual, "scale", Vector3(flat, thin, thin), 0.25)
-	tw.tween_property(_visual, "position:y", 0.42 * flat, 0.25)
+	tw.tween_property(_visual, "scale", Vector3(s * 0.85, s, s), 0.2)
+	tw.tween_property(_visual, "position:y", 0.28 * (s / 0.66), 0.2)
 	if meals_left == 0:
-		remove_from_group("corpses")
 		_smear()
+		_dissolve()
 	return true
+
+
+func _dissolve() -> void:
+	if _dissolving:
+		return
+	_dissolving = true
+	remove_from_group("corpses")
+	Vfx.detach_from(get_tree(), &"corpse_flies", self)
+	if _death_tween and _death_tween.is_valid():
+		_death_tween.kill()
+	var tw := create_tween().set_parallel(true).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.tween_property(_visual, "scale", Vector3(0.04, 0.04, 0.04), 0.26)
+	tw.tween_property(_visual, "position:y", 0.0, 0.26)
+	tw.chain().tween_callback(queue_free)
 
 
 ## Eaten clean: a splat of remains (irregular blob and satellite drops).

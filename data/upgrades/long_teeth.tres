@@ -12,6 +12,6 @@ cost_pestilence = 4
 cost_bones = 1
 requires = Array[String](["gnaw"])
 effects = {
-"bite_range": 0.2
+"bite_range": 0.45
 }
 tree_position = Vector2(1.7, 0.8)

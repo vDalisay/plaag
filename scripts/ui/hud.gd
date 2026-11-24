@@ -84,6 +84,7 @@ var _vigilance: _VigilanceStrip
 var _boss_box: VBoxContainer
 var _boss_title: Label
 var _boss_bar: _BossBar
+var _boss_hint: Label
 var _boss: Node3D
 var _bosses_seen := {}        # instance id -> true (one banner each)
 var _tick_faded := false
@@ -115,6 +116,7 @@ var _hint_panel: PanelContainer
 var _hint_left := 0.0
 var _banner: PanelContainer
 var _banner_label: Label
+var _banner_sub: Label
 var _banner_tween: Tween
 var _card: PanelContainer
 var _card_box: VBoxContainer
@@ -388,7 +390,7 @@ func _refresh_boss() -> void:
 		if not _bosses_seen.has(id) and n is Node3D:
 			_bosses_seen[id] = true
 			_boss = n as Node3D
-			show_banner("%s has come" % boss_title(_boss))
+			show_banner("%s has come" % boss_title(_boss), "Swarm with your Colony to overwhelm their Cleanse!")
 	if not _bosses_seen.is_empty() and not _tick_faded:
 		_tick_faded = true
 		var tw := create_tween()
@@ -399,10 +401,24 @@ func _refresh_boss() -> void:
 	_boss_box.visible = not gone and inf != null
 	if not _boss_box.visible:
 		return
-	_boss_title.text = boss_title(b)
-	_boss_bar.value = _num(inf.get("value"))
-	_boss_bar.cleanse = _num(inf.get("cleanse_rate"))
+	var val := _num(inf.get("value"))
+	var cleanse := _num(inf.get("cleanse_rate"))
+	var net := float(inf.call("net_rate")) if inf.has_method("net_rate") else (0.0 - cleanse)
+	var pressure := float(inf.call("cleanse_pressure")) if inf.has_method("cleanse_pressure") else 0.0
+	var overwhelmed := bool(inf.call("is_overwhelmed")) if inf.has_method("is_overwhelmed") else false
+	_boss_title.text = "%s  ·  %d%%" % [boss_title(b), roundi(val)]
+	_boss_bar.value = val
+	_boss_bar.cleanse = cleanse
+	_boss_bar.net_rate = net
+	_boss_bar.pressure = pressure
+	_boss_bar.overwhelmed = overwhelmed
 	_boss_bar.queue_redraw()
+	if overwhelmed:
+		_boss_hint.text = "▲ +%.1f%%/s  —  Cleanse Broken! Keep swarming!" % maxf(net, 0.1)
+		_boss_hint.label_settings.font_color = UiKit.RED_DARK
+	else:
+		_boss_hint.text = "▼ Cleansing (-%.1f%%/s)  ·  Swarm Pressure %d%% — bring more rats!" % [cleanse, roundi(pressure * 100.0)]
+		_boss_hint.label_settings.font_color = Color(0.12, 0.28, 0.15)
 
 
 ## An Exterminator's `title`, or "The Exterminator".
@@ -431,21 +447,12 @@ func _on_tier_changed(tier: int) -> void:
 func _on_lead_hurt(_hits_left: int) -> void:
 	_overlay.flash_hit()
 	UiKit.punch(_pips, 0.4, 0.3)
-	var cam := get_viewport().get_camera_3d()
-	if cam != null and cam.has_method("shake"):
-		cam.call("shake", HIT_SHAKE)
-	_hitstop()
+	GameFeel.shake_camera(get_tree(), HIT_SHAKE)
+	GameFeel.hitstop(get_tree(), HITSTOP_TIME, HITSTOP_SCALE, 2)
 
 
-## Engine.time_scale HITSTOP_SCALE for HITSTOP_TIME s of real time.
 func _hitstop() -> void:
-	if _hitstop_on:
-		return
-	_hitstop_on = true
-	Engine.time_scale = HITSTOP_SCALE
-	await get_tree().create_timer(HITSTOP_TIME, true, false, true).timeout
-	Engine.time_scale = 1.0
-	_hitstop_on = false
+	GameFeel.hitstop(get_tree(), HITSTOP_TIME, HITSTOP_SCALE, 2)
 
 
 func _on_round_ended(reason: String) -> void:
@@ -554,8 +561,10 @@ func _refresh_toasts(delta: float) -> void:
 
 
 ## Fades `text` in at the centre of the screen, holds it, and fades it out.
-func show_banner(text: String) -> void:
+func show_banner(text: String, subtitle := "") -> void:
 	_banner_label.text = text
+	_banner_sub.text = subtitle
+	_banner_sub.visible = not subtitle.is_empty()
 	_banner.visible = true
 	_banner.modulate.a = 0.0
 	if _banner_tween and _banner_tween.is_valid():
@@ -668,7 +677,7 @@ func _build() -> void:
 	hrow.add_theme_constant_override("separation", 8)
 	_hint_panel.add_child(hrow)
 	hrow.add_child(IconRect.make("door", 22))
-	hrow.add_child(UiKit.label("Walk into a door to Hide", UiKit.SIZE_BODY))
+	hrow.add_child(UiKit.label("Press [%s] at a door to Hide" % UiKit.prompt("hide"), UiKit.SIZE_BODY))
 	_root.add_child(_hint_panel)
 	_hint_panel.set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM, Control.PRESET_MODE_MINSIZE)
 	_hint_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
@@ -677,20 +686,27 @@ func _build() -> void:
 	_hint_panel.offset_bottom -= 120.0
 	_hint_panel.visible = false
 
-	# Centre: the Exterminator's arrival banner, above the middle of the screen.
+	# Centre: the Exterminator's arrival banner, cleanly below the top boss bar.
 	_banner = PanelContainer.new()
 	_banner.name = "BossBanner"
 	_banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_banner.add_theme_stylebox_override("panel", UiKit.panel_box(UiKit.PARCHMENT, 2, 18, 4))
+	_banner.add_theme_stylebox_override("panel", UiKit.panel_box(Color(UiKit.PARCHMENT, 0.96), 3, 18, 4))
+	var bcol := VBoxContainer.new()
+	bcol.add_theme_constant_override("separation", 4)
+	_banner.add_child(bcol)
 	_banner_label = UiKit.label("", UiKit.SIZE_TITLE, UiKit.INK, 0, true)
 	_banner_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_banner.add_child(_banner_label)
+	bcol.add_child(_banner_label)
+	_banner_sub = UiKit.label("", UiKit.SIZE_BODY, UiKit.RED_DARK, 0, false)
+	_banner_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_banner_sub.visible = false
+	bcol.add_child(_banner_sub)
 	_root.add_child(_banner)
 	_banner.set_anchors_and_offsets_preset(Control.PRESET_CENTER, Control.PRESET_MODE_MINSIZE)
 	_banner.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	_banner.grow_vertical = Control.GROW_DIRECTION_BOTH
-	_banner.offset_top -= 130.0
-	_banner.offset_bottom -= 130.0
+	_banner.offset_top += 10.0
+	_banner.offset_bottom += 10.0
 	_banner.visible = false
 
 	# Centre: the Round title card.
@@ -775,9 +791,22 @@ func _build_top() -> void:
 	_boss_box.add_child(_boss_title)
 	_boss_bar = _BossBar.new()
 	_boss_bar.name = "BossBar"
-	_boss_bar.custom_minimum_size = Vector2(BOSS_BAR_WIDTH, 18)
+	_boss_bar.custom_minimum_size = Vector2(BOSS_BAR_WIDTH, 28)
 	_boss_bar.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	_boss_box.add_child(_boss_bar)
+	var hint_pill := PanelContainer.new()
+	hint_pill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hint_pill.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	var hpb := UiKit.panel_box(Color(UiKit.PANEL_FILL, 0.88), 1, 4, 2)
+	hpb.content_margin_left = 10
+	hpb.content_margin_right = 10
+	hpb.content_margin_top = 2
+	hpb.content_margin_bottom = 3
+	hint_pill.add_theme_stylebox_override("panel", hpb)
+	_boss_hint = UiKit.label("", UiKit.SIZE_SMALL, Color(0.12, 0.28, 0.15), 0)
+	_boss_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint_pill.add_child(_boss_hint)
+	_boss_box.add_child(hint_pill)
 	_boss_box.visible = false
 
 
@@ -850,10 +879,7 @@ func _build_abilities() -> void:
 	_raid_box.add_child(PromptHint.make("raid", "Raid", UiKit.SIZE_SMALL, 4))
 	_hide_box = _slot_box("door")
 	_hide_slot = _hide_box.get_child(0) as _AbilitySlot
-	var hint := HBoxContainer.new()
-	hint.alignment = BoxContainer.ALIGNMENT_CENTER
-	hint.add_child(UiKit.label("Hide: enter a door", UiKit.SIZE_SMALL, UiKit.INK, 4))
-	_hide_box.add_child(hint)
+	_hide_box.add_child(PromptHint.make("hide", "Hide", UiKit.SIZE_SMALL, 4))
 	_ability_bar.visible = false
 
 
@@ -954,21 +980,32 @@ class _VigilanceStrip extends Control:
 		draw_polyline(PackedVector2Array([tri[0], tri[1], tri[2], tri[0]]), UiKit.OUTLINE, 1.0, true)
 
 
-## The Exterminator's Infection bar with its faint self-Cleanse band.
+## The Exterminator's Infection bar + Cleanse Overwhelm pressure gauge beneath.
 class _BossBar extends Control:
-	var value := 0.0     # 0..100
-	var cleanse := 0.0   # %/s
+	var value := 0.0        # 0..100
+	var cleanse := 0.0      # %/s
+	var net_rate := 0.0     # %/s (positive = winning, negative = Cleansing)
+	var pressure := 0.0     # 0..1 (Swarm Bite rate / Cleanse rate)
+	var overwhelmed := false
 
 	func _draw() -> void:
-		var r := Rect2(Vector2.ZERO, size)
-		draw_rect(r, Color(UiKit.PARCHMENT_LIGHT, 0.85))
+		var main_h := size.y * 0.66
+		var r := Rect2(0, 0, size.x, main_h)
+		draw_rect(r, Color(UiKit.PARCHMENT_LIGHT, 0.88))
 		var w := r.size.x * clampf(value / 100.0, 0.0, 1.0)
 		draw_rect(Rect2(r.position, Vector2(w, r.size.y)), UiKit.RED)
-		if cleanse > 0.0 and value > 0.0:
+		if cleanse > 0.0 and value > 0.0 and not overwhelmed:
 			var lo := clampf(value - cleanse * CLEANSE_SHOWN, 0.0, 100.0)
 			var x0 := r.size.x * lo / 100.0
-			draw_rect(Rect2(x0, 0, maxf(2.0, w - x0), r.size.y), Color(UiKit.INK, 0.35))
-		draw_rect(r, UiKit.INK, false, 2.0)
+			draw_rect(Rect2(x0, 0, maxf(3.0, w - x0), r.size.y), Color(UiKit.SAGE, 0.55))
+		draw_rect(r, UiKit.RED if overwhelmed else UiKit.INK, false, 2.5 if overwhelmed else 2.0)
+		# Lower strip: Cleanse Pressure tug-of-war meter (fills sage -> amber -> crimson when broken).
+		var pr := Rect2(0, main_h + 2.0, size.x, size.y - main_h - 2.0)
+		draw_rect(pr, Color(UiKit.PARCHMENT_DARK, 0.8))
+		var pw := pr.size.x * clampf(pressure, 0.0, 1.0)
+		var pcol := UiKit.RED if overwhelmed else UiKit.SAGE.lerp(UiKit.AMBER, clampf(pressure, 0.0, 1.0))
+		draw_rect(Rect2(pr.position, Vector2(pw, pr.size.y)), pcol)
+		draw_rect(pr, UiKit.INK, false, 1.2)
 
 
 ## The Lead Rat's hits left as ink pips.

@@ -127,10 +127,20 @@ static func _shape(key: String, make: Callable) -> Array:
 	return _shapes[key]
 
 
-## One triangle surface from [surface arrays, transform] items.
+## One triangle surface from [surface arrays, transform] items (preserving UVs & tangents).
 static func _build(items: Array) -> ArrayMesh:
+	var has_uv := false
+	var has_tan := false
+	for item: Array in items:
+		var a: Array = item[0]
+		if a.size() > Mesh.ARRAY_TEX_UV and a[Mesh.ARRAY_TEX_UV] != null:
+			has_uv = true
+		if a.size() > Mesh.ARRAY_TANGENT and a[Mesh.ARRAY_TANGENT] != null:
+			has_tan = true
 	var v := PackedVector3Array()
 	var n := PackedVector3Array()
+	var uv := PackedVector2Array()
+	var tan := PackedFloat32Array()
 	var ii := PackedInt32Array()
 	for item: Array in items:
 		var arrays: Array = item[0]
@@ -141,6 +151,12 @@ static func _build(items: Array) -> ArrayMesh:
 		var normals := PackedVector3Array()
 		if arrays[Mesh.ARRAY_NORMAL] != null:
 			normals = arrays[Mesh.ARRAY_NORMAL]
+		var uvs := PackedVector2Array()
+		if has_uv and arrays.size() > Mesh.ARRAY_TEX_UV and arrays[Mesh.ARRAY_TEX_UV] != null:
+			uvs = arrays[Mesh.ARRAY_TEX_UV]
+		var tans := PackedFloat32Array()
+		if has_tan and arrays.size() > Mesh.ARRAY_TANGENT and arrays[Mesh.ARRAY_TANGENT] != null:
+			tans = arrays[Mesh.ARRAY_TANGENT]
 		var idx := PackedInt32Array()
 		if arrays[Mesh.ARRAY_INDEX] != null:
 			idx = arrays[Mesh.ARRAY_INDEX]
@@ -148,6 +164,21 @@ static func _build(items: Array) -> ArrayMesh:
 		for k in verts.size():
 			v.append(xf * verts[k])
 			n.append((nb * normals[k]).normalized() if k < normals.size() else Vector3.UP)
+			if has_uv:
+				uv.append(uvs[k] if k < uvs.size() else Vector2.ZERO)
+			if has_tan:
+				var tk := k * 4
+				if tk + 3 < tans.size():
+					var tv := (xf.basis * Vector3(tans[tk], tans[tk + 1], tans[tk + 2])).normalized()
+					tan.append(tv.x)
+					tan.append(tv.y)
+					tan.append(tv.z)
+					tan.append(-tans[tk + 3] if flip else tans[tk + 3])
+				else:
+					tan.append(1.0)
+					tan.append(0.0)
+					tan.append(0.0)
+					tan.append(1.0)
 		if idx.is_empty():
 			idx.resize(verts.size())
 			for k in verts.size():
@@ -160,6 +191,10 @@ static func _build(items: Array) -> ArrayMesh:
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = v
 	arrays[Mesh.ARRAY_NORMAL] = n
+	if has_uv:
+		arrays[Mesh.ARRAY_TEX_UV] = uv
+	if has_tan:
+		arrays[Mesh.ARRAY_TANGENT] = tan
 	arrays[Mesh.ARRAY_INDEX] = ii
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)

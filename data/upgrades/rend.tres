@@ -12,6 +12,7 @@ cost_pestilence = 8
 cost_bones = 3
 requires = Array[String](["long_teeth"])
 effects = {
-"bite_chunk": 1.0
+"bite_chunk": 3.0,
+"bite_rate_bonus": 0.4
 }
 tree_position = Vector2(3.3, 0.8)

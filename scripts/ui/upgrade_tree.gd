@@ -48,7 +48,9 @@ enum State { HIDDEN, TEASER, LOCKED, OPEN, MAXED }
 const UPGRADES_DIR := "res://data/upgrades/"
 const TITLE_SCENE := "res://scenes/ui/title.tscn"
 ## Stats that are the plague itself: their nodes are inked in red.
-const PLAGUE_STATS := ["lethality", "unlock_fleas", "unlock_contagion"]
+const PLAGUE_STATS := ["lethality", "unlock_fleas", "unlock_contagion", "plague_burst_radius"]
+## High-impact Keystone nodes get an ornate double wax-seal ring and heavier buy impact.
+const KEYSTONE_IDS := ["litters", "frenzy_birth", "plague_burst", "ravenous_cleave", "fleas", "contagion", "old_blood"]
 ## Pixels per tree unit, node circle radius, node hit box size.
 const UNIT := 86.0
 const RADIUS := 38.0
@@ -76,8 +78,13 @@ const STAT_INFO := {
 	"bite_chunk": ["Bite strength", "%.0f"],
 	"bite_rate_bonus": ["Bite bonus", "%.2f"],
 	"start_adults": ["Starting Adults", "%.0f"],
-	"feed_time": ["Feeding time", "%.1f s"],
-	"pup_maturity": ["Pup maturity", "%.0f s"],
+	"feed_time": ["Feeding time", "%.2f s"],
+	"pup_maturity": ["Pup maturity", "%.1f s"],
+	"extra_pups_per_feed": ["Extra Pups / Feed", "+%.0f"],
+	"corpse_meals": ["Extra Corpse Meals", "+%.0f"],
+	"death_pups": ["Pups on Death", "%.0f"],
+	"plague_burst_radius": ["Rupture Radius", "%.1f u"],
+	"lead_cleave": ["Lead Bite Targets", "%.0f"],
 	"lethality": ["Lethality", "x%.2f"],
 	"carry_over": ["Carry-over", "%"],
 	"round_length": ["Round length", "%.0f s"],
@@ -131,6 +138,8 @@ var _ready_done := false
 var _time := 0.0
 var _zoom := 1.0
 var _pan := Vector2.ZERO
+var _shake_amp := 0.0
+var _shake_t := 0.0
 var _dragging := false
 var _pan_tween: Tween
 var _font: Font             # MSDF body font: crisp at every zoom
@@ -468,7 +477,10 @@ func _area() -> Rect2:
 func _apply_view() -> void:
 	_pan = _clamp_pan(_pan)
 	_board.scale = Vector2(_zoom, _zoom)
-	_board.position = _area().get_center() + _pan
+	var shake_off := Vector2.ZERO
+	if _shake_amp > 0.05:
+		shake_off = Vector2(sin(_shake_t * 62.0), cos(_shake_t * 78.0)) * _shake_amp
+	_board.position = _area().get_center() + _pan + shake_off
 	_view_zoom = _zoom
 	_view_pan = _pan
 
@@ -653,6 +665,10 @@ func _focus_start() -> void:
 
 func _process(delta: float) -> void:
 	_time += delta
+	if _shake_amp > 0.01:
+		_shake_t += delta
+		_shake_amp = maxf(0.0, _shake_amp * exp(-16.0 * delta) - delta * 4.0)
+		_apply_view()
 	_process_hold(delta)
 	# Reveal lines ink in, then the node fades in.
 	for id: String in _reveal.keys():
@@ -704,20 +720,53 @@ func _axis(a: JoyAxis) -> float:
 
 
 # ---------------------------------------------------------------------- feedback
-## Ink floods the circle and splashes outward, the node punches, the spent
-## amounts float up beside the wallet and the wallet rolls down.
+## Heavy wax-seal stamp slam: anticipation dip, punch bounce, board micro-shake,
+## radial ink/crimson splatter, and bold stat-upgrade pop above the node.
 func _play_buy(n: UpgradeNodeDef, cost: Vector2i) -> void:
 	var fx: Dictionary = _fx[n.id]
+	var is_key := KEYSTONE_IDS.has(n.id)
+	var maxed := _level(n) >= n.max_level
+	var heavy := is_key or maxed
 	var t := create_tween()
-	t.tween_method(_set_fx.bind(n.id, "fill"), 0.0, 1.0, 0.14).set_ease(Tween.EASE_OUT)
-	t.parallel().tween_method(_set_fx.bind(n.id, "splash"), 0.0, 1.0, 0.4).set_ease(Tween.EASE_OUT)
-	t.tween_method(_set_fx.bind(n.id, "fill"), 1.0, 0.0, 0.25)
+	t.tween_method(_set_fx.bind(n.id, "fill"), 0.0, 1.0, 0.12).set_ease(Tween.EASE_OUT)
+	t.parallel().tween_method(_set_fx.bind(n.id, "splash"), 0.0, 1.0, 0.55 if heavy else 0.42).set_ease(Tween.EASE_OUT)
+	t.tween_method(_set_fx.bind(n.id, "fill"), 1.0, 0.0, 0.28)
 	t.tween_callback(func() -> void: fx["splash"] = 0.0)
-	_pop(n.id, 0.14)
+	_stamp_pop(n.id, 0.30 if heavy else 0.20)
+	if not UiKit.reduce_motion():
+		_shake_amp = maxf(_shake_amp, 12.0 if heavy else 5.5)
+	_float_node_pop(n, "KEYSTONE!" if (is_key and _level(n) == 1) else ("MAXED!" if maxed else n.title + " ↑"))
 	if cost.x > 0:
 		_float_spent(_pest_label, "−%d" % cost.x)
 	if cost.y > 0:
 		_float_spent(_bones_label, "−%d" % cost.y)
+
+
+func _stamp_pop(id: String, amount: float) -> void:
+	if UiKit.reduce_motion():
+		return
+	var b: Button = _buttons[id]
+	b.pivot_offset = CIRCLE
+	var pop := create_tween()
+	pop.tween_property(b, "scale", Vector2.ONE * 0.86, 0.04).set_ease(Tween.EASE_IN)
+	pop.tween_property(b, "scale", Vector2.ONE * (1.0 + amount), 0.08).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	pop.tween_property(b, "scale", Vector2.ONE, 0.24).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+
+func _float_node_pop(n: UpgradeNodeDef, text: String) -> void:
+	var b: Button = _buttons[n.id]
+	var col := UiKit.RED if (_is_plague(n) or KEYSTONE_IDS.has(n.id)) else UiKit.INK
+	var l := UiKit.label(text, UiKit.SIZE_LARGE, col, 5, KEYSTONE_IDS.has(n.id))
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(l)
+	var c := b.get_global_transform() * CIRCLE
+	var tw := l.get_minimum_size().x
+	l.position = Vector2(c.x - tw * 0.5, c.y - RADIUS * _zoom - 26.0)
+	var tw_anim := create_tween().set_parallel()
+	if not UiKit.reduce_motion():
+		tw_anim.tween_property(l, "position:y", l.position.y - 44.0, 0.85).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw_anim.tween_property(l, "modulate:a", 0.0, 0.7).set_delay(0.25)
+	tw_anim.chain().tween_callback(l.queue_free)
 
 
 ## A short sideways shake, and the lacking wallet counters flash.
@@ -1156,15 +1205,23 @@ func _draw_node(b: Button, n: UpgradeNodeDef) -> void:
 		b.draw_circle(c, RADIUS + 12.0 + 2.0 * k, Color(UiKit.AMBER, 0.10 + 0.08 * k))
 		b.draw_circle(c, RADIUS + 7.0 + 1.5 * k, Color(UiKit.AMBER, 0.16 + 0.08 * k))
 		b.draw_arc(c, RADIUS + 5.0 + 1.5 * k, 0.0, TAU, 48, Color(UiKit.AMBER.darkened(0.1), 0.55 + 0.3 * k), 2.5, true)
-	# Splash: an ink ring and droplets thrown out of the circle.
+	# Splash: bold ink/crimson wax-seal burst and radial splatter droplets.
 	var splash: float = fx["splash"]
+	var is_key := KEYSTONE_IDS.has(n.id)
 	if splash > 0.0:
-		for i in 9:
-			var ang := float(i) / 9.0 * TAU + ph
-			var dist := RADIUS + 6.0 + splash * (18.0 + float((i * 7) % 5) * 5.0)
-			b.draw_circle(c + Vector2(cos(ang), sin(ang)) * dist, 4.0 * (1.0 - splash) + 1.0, Color(ink, 1.0 - splash))
-		_wobbly_circle(b, c, RADIUS + 4.0 + splash * 26.0, Color(ink, (1.0 - splash) * 0.8), 3.0 * (1.0 - splash) + 1.0, ph)
-	# Body.
+		var drops := 16 if is_key else 12
+		for i in drops:
+			var ang := float(i) / float(drops) * TAU + ph
+			var dist := RADIUS + 8.0 + splash * ((32.0 if is_key else 22.0) + float((i * 7) % 5) * 6.0)
+			var dcol := UiKit.AMBER if (is_key and i % 3 == 0) else ink
+			b.draw_circle(c + Vector2(cos(ang), sin(ang)) * dist, (5.5 if is_key else 4.2) * (1.0 - splash) + 1.2, Color(dcol, 1.0 - splash))
+		_wobbly_circle(b, c, RADIUS + 5.0 + splash * (42.0 if is_key else 30.0), Color(ink, (1.0 - splash) * 0.9), 4.0 * (1.0 - splash) + 1.0, ph)
+		if is_key:
+			_wobbly_circle(b, c, RADIUS + 12.0 + splash * 56.0, Color(UiKit.AMBER, (1.0 - splash) * 0.8), 2.5 * (1.0 - splash) + 0.5, ph + 1.0)
+	# Body (+ ornate outer seal ring for Keystones).
+	if is_key:
+		var k_col := UiKit.RED if _is_plague(n) else UiKit.AMBER.darkened(0.15)
+		_wobbly_circle(b, c, RADIUS + 5.5, Color(k_col, alpha * 0.85), 2.6, ph + 3.0)
 	if maxed:
 		b.draw_circle(c, RADIUS, ink)
 	else:

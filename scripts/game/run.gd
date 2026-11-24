@@ -45,6 +45,8 @@ const PREVIEW_LINES := 4
 const BASE_STATS := {
 	"rat_speed": 6.0, "bite_range": 1.6, "bite_cooldown": 1.2, "bite_chunk": 3.0,
 	"bite_rate_bonus": 0.5, "start_adults": 0.0, "feed_time": 1.5, "pup_maturity": 15.0,
+	"extra_pups_per_feed": 0.0, "corpse_meals": 0.0, "death_pups": 0.0,
+	"plague_burst_radius": 0.0, "lead_cleave": 1.0,
 	"lethality": 1.0,          # multiplies every townsperson's Infection base_rate
 	"carry_over": 0.0,         # 0..1 share of last Round's final Colony size
 	"round_length": 90.0,

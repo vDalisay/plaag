@@ -1,18 +1,17 @@
 [gd_resource type="Resource" script_class="UpgradeNodeDef" format=3]
 
-[ext_resource type="Script" path="res://scripts/data/upgrade_node_def.gd" id="1_0wbht"]
+[ext_resource type="Script" path="res://scripts/data/upgrade_node_def.gd" id="1_brood"]
 
 [resource]
-script = ExtResource("1_0wbht")
+script = ExtResource("1_brood")
 id = "brood"
 title = "Brood"
-description = "A nest under the floorboards. One more Adult starts each Round."
-max_level = 3
-cost_pestilence = 5
-cost_bones = 2
-cost_growth = 1.7
+description = "Call forth a swelling pack at Round start."
+max_level = 4
+cost_pestilence = 3
+cost_bones = 0
+cost_growth = 1.8
 requires = Array[String](["gnaw"])
-effects = {
-"start_adults": 1.0
-}
+level_values = Array[float]([3.0, 10.0, 28.0, 75.0])
+level_stat = "start_adults"
 tree_position = Vector2(0, -1.5)

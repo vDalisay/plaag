@@ -1,0 +1,18 @@
+[gd_resource type="Resource" script_class="UpgradeNodeDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/upgrade_node_def.gd" id="1_maw"]
+
+[resource]
+script = ExtResource("1_maw")
+id = "ravenous_cleave"
+title = "Ravenous Maw"
+description = "Keystone: the Lead Rat's Bite cleaves multiple townsfolk at once."
+max_level = 2
+cost_pestilence = 14
+cost_bones = 6
+cost_growth = 1.8
+requires = Array[String](["rend"])
+effects = {
+"lead_cleave": 2.0
+}
+tree_position = Vector2(4.7, 0.8)

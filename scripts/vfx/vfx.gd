@@ -34,9 +34,9 @@ const Recipes := preload("res://scripts/vfx/vfx_recipes.gd")
 const SCRIPT_PATH := "res://scripts/vfx/vfx.gd"
 
 ## Pool sizes at Full (Reduced halves them).
-const PUFF_CAP := 720
-const STROKE_CAP := 320
-const FLAME_CAP := 96
+const PUFF_CAP := 960
+const STROKE_CAP := 480
+const FLAME_CAP := 120
 const TEST_INTERVAL := 0.4
 const TEST_RADIUS := 3.2
 const GRID_INTERVAL := 1.5
@@ -246,9 +246,9 @@ func attach(kind: StringName, node: Node3D, offset := Vector3.ZERO) -> void:
 		return
 	match kind:
 		&"flies":
-			flies.attach(node, Flies.Mode.HEAD, randi_range(2, 4), offset)
+			flies.attach(node, Flies.Mode.HEAD, 2, offset)
 		&"corpse_flies":
-			flies.attach(node, Flies.Mode.CORPSE, randi_range(3, 5), offset)
+			flies.attach(node, Flies.Mode.CORPSE, randi_range(2, 3), offset)
 
 
 func detach(_kind: StringName, node: Node3D) -> void:

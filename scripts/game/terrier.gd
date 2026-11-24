@@ -22,8 +22,13 @@ const SCALE := 1.8
 ## cat and rats and from the bare parchment.
 const COAT := Color(0.42, 0.35, 0.27)
 const MEALS := 2
+## Seconds sniffing a lost trail before giving up and trotting away from the house.
+const SNIFF_TIME := 1.2
+const ROAM_MIN_DIST := 10.0
+const ROAM_MAX_DIST := 16.0
+const CORPSE_DECAY := 20.0
 
-enum Mode { HUNT, WINDUP, LUNGE, PAUSE, SNIFF, DEAD }
+enum Mode { HUNT, WINDUP, LUNGE, PAUSE, SNIFF, ROAM, DEAD }
 
 @export var run_speed := 6.5
 @export var lunge_range := 1.8
@@ -34,6 +39,7 @@ enum Mode { HUNT, WINDUP, LUNGE, PAUSE, SNIFF, DEAD }
 ## Speed factor once infected.
 @export var sick_speed := 0.7
 @export var rng_seed := 0
+@export var wander_bounds := Rect2(-30.0, -30.0, 60.0, 60.0)
 
 var mode := Mode.HUNT
 var catches := 0
@@ -47,8 +53,12 @@ var _tail: Node3D
 var _body_mat: StandardMaterial3D
 var _mode_left := 0.0
 var _lunge_to := Vector3.ZERO
+var _roam_goal := Vector3.ZERO
+var _roam_origin := Vector3.ZERO
 var _telegraph: DangerZone
 var _gait := 0.0
+var _corpse_age := 0.0
+var _dissolving := false
 
 @onready var infection: InfectionComponent = $Infection
 @onready var _shape: CollisionShape3D = $CollisionShape3D
@@ -65,6 +75,7 @@ func _ready() -> void:
 	_props = Props.new(_rng.randi())
 	_build()
 	infection.value_changed.connect(_on_infection_changed)
+	infection.bitten.connect(_on_bitten)
 	infection.died.connect(_on_died)
 
 
@@ -109,6 +120,10 @@ func _build() -> void:
 
 func _physics_process(delta: float) -> void:
 	if mode == Mode.DEAD:
+		if not _dissolving:
+			_corpse_age += delta
+			if _corpse_age >= CORPSE_DECAY:
+				_dissolve()
 		return
 	_gait += delta
 	_mode_left -= delta
@@ -120,13 +135,31 @@ func _physics_process(delta: float) -> void:
 			if _mode_left <= 0.0:
 				mode = Mode.HUNT
 		Mode.WINDUP:
-			velocity = Vector3.ZERO
-			_face(_lunge_to - global_position, delta * 14.0)
-			if _mode_left <= 0.0:
-				mode = Mode.LUNGE
-				_mode_left = lunge_range * 1.4 / lunge_speed
+			if lead == null:
+				_free_telegraph()
+				_start_sniff()
+			else:
+				velocity = Vector3.ZERO
+				_face(_lunge_to - global_position, delta * 14.0)
+				if _mode_left <= 0.0:
+					mode = Mode.LUNGE
+					_mode_left = lunge_range * 1.4 / lunge_speed
 		Mode.LUNGE:
 			_lunge(lead, delta, slow)
+		Mode.SNIFF:
+			if lead != null:
+				mode = Mode.HUNT
+				_hunt(lead, delta, slow)
+			else:
+				velocity = Vector3.ZERO
+				if _mode_left <= 0.0:
+					_start_roam()
+		Mode.ROAM:
+			if lead != null:
+				mode = Mode.HUNT
+				_hunt(lead, delta, slow)
+			else:
+				_roam(delta, slow)
 		_:
 			_hunt(lead, delta, slow)
 	_dust_left -= delta
@@ -139,8 +172,7 @@ func _physics_process(delta: float) -> void:
 
 func _hunt(lead: Node3D, delta: float, slow: float) -> void:
 	if lead == null:
-		mode = Mode.SNIFF
-		velocity = Vector3.ZERO
+		_start_sniff()
 		return
 	mode = Mode.HUNT
 	var to := lead.global_position - global_position
@@ -149,6 +181,60 @@ func _hunt(lead: Node3D, delta: float, slow: float) -> void:
 		begin_lunge(lead.global_position)
 		return
 	_move(to.normalized(), run_speed * slow, delta)
+
+
+## Lost sight of the Lead Rat (it hid in a house): sniff briefly, then leave.
+func _start_sniff() -> void:
+	mode = Mode.SNIFF
+	_mode_left = SNIFF_TIME
+	_roam_origin = Vector3(global_position.x, 0.0, global_position.z)
+	velocity = Vector3.ZERO
+
+
+func _start_roam() -> void:
+	mode = Mode.ROAM
+	_mode_left = _rng.randf_range(3.5, 6.0)
+	_roam_goal = _pick_roam_goal(_roam_origin)
+
+
+func _roam(delta: float, slow: float) -> void:
+	var to := _roam_goal - global_position
+	to.y = 0.0
+	if to.length() < 0.7 or _mode_left <= 0.0:
+		_mode_left = _rng.randf_range(3.5, 6.0)
+		_roam_goal = _pick_roam_goal(Vector3(global_position.x, 0.0, global_position.z))
+		velocity = Vector3.ZERO
+		return
+	var before := global_position
+	_move(to.normalized(), run_speed * 0.78 * slow, delta)
+	if global_position.distance_to(before) < 0.005 and _mode_left < 3.0:
+		_roam_goal = _pick_roam_goal(_roam_origin)
+
+
+## Picks a patrol spot at least ROAM_MIN_DIST away from `avoid` (the house door).
+func _pick_roam_goal(avoid: Vector3) -> Vector3:
+	var b := wander_bounds.abs().grow(-2.0)
+	# Prefer returning to the Rat-catcher if he is far from the doorstep.
+	for n: Node in get_tree().get_nodes_in_group("exterminator"):
+		var e := n as Node3D
+		if e != null and is_instance_valid(e) and e.get("is_beaten") != true:
+			var ep := Vector3(e.global_position.x, 0.0, e.global_position.z)
+			if _flat_d(ep, avoid) >= ROAM_MIN_DIST:
+				return ep
+	var best := Vector3(b.get_center().x, 0.0, b.get_center().y)
+	var best_d := 0.0
+	for i in 12:
+		var a := _rng.randf() * TAU
+		var r := _rng.randf_range(ROAM_MIN_DIST, ROAM_MAX_DIST)
+		var p := Vector3(clampf(avoid.x + sin(a) * r, b.position.x, b.end.x), 0.0,
+			clampf(avoid.z + cos(a) * r, b.position.y, b.end.y))
+		var d := _flat_d(p, avoid)
+		if d > best_d:
+			best_d = d
+			best = p
+		if d >= ROAM_MIN_DIST:
+			return p
+	return best
 
 
 ## Crouches over an INK ring at `at`, then springs at it.
@@ -243,15 +329,23 @@ static func _flat_d(a: Vector3, b: Vector3) -> float:
 func _animate() -> void:
 	var speed := Vector2(velocity.x, velocity.z).length()
 	var crouch := 1.0 if mode == Mode.WINDUP else 0.0
+	var sniff := 1.0 if mode == Mode.SNIFF else 0.0
 	_visual.position.y = absf(sin(_gait * 22.0)) * 0.015 * minf(speed, 7.0) - crouch * 0.08
-	_visual.rotation.x = 0.15 * crouch - (0.1 if mode == Mode.LUNGE else 0.0)
+	_visual.rotation.x = 0.15 * crouch + 0.24 * sniff - (0.1 if mode == Mode.LUNGE else 0.0)
+	_visual.rotation.y = sin(_gait * 9.0) * 0.35 * sniff
 	_tail.rotation.z = sin(_gait * (20.0 if mode == Mode.PAUSE else 8.0)) * 0.4
+
+
+func _on_bitten(_chunk: float) -> void:
+	if mode == Mode.DEAD:
+		return
+	GameFeel.flash(get_tree(), _visual, Color(1.0, 0.85, 0.80), 0.08)
 
 
 func _on_infection_changed(value: float) -> void:
 	if mode == Mode.DEAD:
 		return
-	_body_mat.albedo_color = COAT.lerp(Props.RED, smoothstep(0.0, 60.0, value))
+	_body_mat.albedo_color = COAT.lerp(Props.RED, smoothstep(0.0, 65.0, value))
 
 
 func _on_died() -> void:
@@ -264,9 +358,11 @@ func _on_died() -> void:
 	collision_mask = 0
 	_shape.set_deferred("disabled", true)
 	_body_mat.albedo_color = CORPSE_INK
+	Vfx.play(get_tree(), &"plague_death", global_position)
 	var tw := create_tween().set_parallel(true).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-	tw.tween_property(_visual, "rotation", Vector3(0.0, 0.0, PI * 0.5), 0.35)
-	tw.tween_property(_visual, "position", Vector3(0.0, 0.25, 0.0), 0.35)
+	tw.tween_property(_visual, "rotation", Vector3(0.0, 0.0, PI * 0.5), 0.32)
+	tw.tween_property(_visual, "position", Vector3(0.0, 0.22, 0.0), 0.32)
+	tw.tween_property(_visual, "scale", Vector3.ONE * 0.78, 0.32)
 
 
 func is_dead() -> bool:
@@ -278,7 +374,19 @@ func take_meal() -> bool:
 	if mode != Mode.DEAD or meals_left <= 0:
 		return false
 	meals_left -= 1
-	_visual.scale = Vector3(lerpf(1.0, 0.3, float(MEALS - meals_left) / MEALS), 1.0, 1.0)
+	_visual.scale = Vector3.ONE * lerpf(0.78, 0.35, float(MEALS - meals_left) / MEALS)
 	if meals_left == 0:
-		remove_from_group("corpses")
+		_dissolve()
 	return true
+
+
+func _dissolve() -> void:
+	if _dissolving:
+		return
+	_dissolving = true
+	remove_from_group("corpses")
+	Vfx.detach_from(get_tree(), &"corpse_flies", self)
+	var tw := create_tween().set_parallel(true).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.tween_property(_visual, "scale", Vector3(0.05, 0.05, 0.05), 0.25)
+	tw.tween_property(_visual, "position:y", 0.0, 0.25)
+	tw.chain().tween_callback(queue_free)

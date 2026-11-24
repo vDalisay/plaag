@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="UpgradeNodeDef" format=3]
+
+[ext_resource type="Script" path="res://scripts/data/upgrade_node_def.gd" id="1_frenzy"]
+
+[resource]
+script = ExtResource("1_frenzy")
+id = "frenzy_birth"
+title = "Carrion Tide"
+description = "Keystone: infected people who die near your Colony instantly burst with newborn Pups."
+max_level = 2
+cost_pestilence = 18
+cost_bones = 10
+cost_growth = 2.0
+requires = Array[String](["litters", "old_blood"])
+level_values = Array[float]([2.0, 5.0])
+level_stat = "death_pups"
+tree_position = Vector2(0, -6.6)

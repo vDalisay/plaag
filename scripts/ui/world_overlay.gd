@@ -52,11 +52,13 @@ var top_inset := 0.0
 
 var _time := 0.0
 var _bar_age := {}          # instance id -> seconds since its bar appeared
-var _bites := {}            # instance id -> [sum: float, left: float, node: Node3D]
-var _numbers: Array = []    # [world: Vector3, text: String, age: float]
+var _bites := {}            # instance id -> [sum: float, left: float, node: Node3D, resisted: bool]
+var _numbers: Array = []    # [world: Vector3, text: String, age: float, color: Color]
 var _flights: Array = []    # [kind: String, amount: int, from: Vector2, age: float, bend: float]
 var _vignette := 0.0
 var _font: Font
+var _bite_flash := 0.0      # brief ring pop when Lead Rat Bite comes off cooldown
+var _prev_bite_prog := 1.0
 
 
 func _ready() -> void:
@@ -68,6 +70,7 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	_time += delta
 	_vignette = maxf(0.0, _vignette - delta)
+	_bite_flash = maxf(0.0, _bite_flash - delta)
 	# Close the Bite windows into floating numbers.
 	for id: int in _bites.keys():
 		var b: Array = _bites[id]
@@ -76,7 +79,7 @@ func _process(delta: float) -> void:
 			_bites.erase(id)
 			var n: Node3D = b[2]
 			if is_instance_valid(n) and n.is_inside_tree():
-				_spawn_number(n.global_position + Vector3.UP * NUMBER_HEIGHT, b[0])
+				_spawn_number(n.global_position + Vector3.UP * NUMBER_HEIGHT, float(b[0]), bool(b[3]))
 	var i := 0
 	while i < _numbers.size():
 		_numbers[i][2] += delta
@@ -103,11 +106,17 @@ func add_bite(target: Node3D, chunk: float) -> void:
 		return
 	if not target.is_in_group("townsfolk"):
 		return  # indoors: the house shows the Bite
+	var resisted := false
+	if target.is_in_group("exterminator"):
+		var inf := target.get_node_or_null("Infection")
+		if inf != null and inf.has_method("is_overwhelmed"):
+			resisted = not bool(inf.call("is_overwhelmed"))
 	var id := target.get_instance_id()
 	if _bites.has(id):
 		_bites[id][0] += chunk
+		_bites[id][3] = resisted
 	else:
-		_bites[id] = [chunk, NUMBER_WINDOW, target]
+		_bites[id] = [chunk, NUMBER_WINDOW, target, resisted]
 
 
 ## A currency payout earned at `world_pos`: flies an icon to the wallet.
@@ -160,10 +169,20 @@ func _numbers_on() -> bool:
 	return s == null or bool(s.get("damage_numbers"))
 
 
-func _spawn_number(world: Vector3, amount: float) -> void:
+func _spawn_number(world: Vector3, amount: float, resisted := false) -> void:
 	if _numbers.size() >= NUMBER_MAX:
 		_numbers.remove_at(0)
-	_numbers.append([world, "+%d" % maxi(1, roundi(amount)), 0.0])
+	var text := ""
+	var col := UiKit.RED
+	if resisted:
+		text = "Cleansed!" if amount < 0.8 else "+%.1f%%" % amount
+		col = UiKit.SAGE
+	elif amount < 1.0:
+		text = "+%.1f%%" % amount
+		col = UiKit.SEPIA
+	else:
+		text = "+%d%%" % roundi(amount)
+	_numbers.append([world, text, 0.0, col])
 
 
 func _target(kind: String) -> Vector2:
@@ -177,12 +196,93 @@ func _target(kind: String) -> Vector2:
 func _draw() -> void:
 	var cam := get_viewport().get_camera_3d()
 	if cam != null:
+		_draw_lead_bite_ring(cam)
+		_draw_hide_prompt(cam)
 		_draw_bars(cam)
 		_draw_numbers(cam)
 		_draw_boss_arrow(cam)
 	_draw_flights()
 	if _vignette > 0.0:
 		_draw_vignette(_vignette / VIGNETTE_TIME)
+
+
+## Diegetic Bite cooldown arc + subtle range preview projected around the Lead Rat.
+func _draw_lead_bite_ring(cam: Camera3D) -> void:
+	var lead := get_tree().get_first_node_in_group("lead_rat") as Node3D
+	if lead == null or not is_instance_valid(lead) or lead.get("is_dead") == true or lead.get("is_hidden") == true:
+		return
+	var pos := lead.global_position + Vector3(0.0, 0.08, 0.0)
+	if cam.is_position_behind(pos):
+		return
+	var center := cam.unproject_position(pos)
+	var prog := float(lead.call("bite_cooldown_progress")) if lead.has_method("bite_cooldown_progress") else 1.0
+	if _prev_bite_prog < 1.0 and prog >= 1.0:
+		_bite_flash = 0.28
+	_prev_bite_prog = prog
+	var br := float(lead.call("bite_range_val")) if lead.has_method("bite_range_val") else 1.6
+	var edge_world := pos + cam.global_basis.x * br
+	var range_px := clampf(center.distance_to(cam.unproject_position(edge_world)), 22.0, 110.0)
+	var ring_px := clampf(range_px * 0.48, 16.0, 34.0)
+	var has_target := bool(lead.call("has_bite_target")) if lead.has_method("has_bite_target") else false
+
+	# Subtle dashed Bite range circle when approaching/in range of a target or recharging.
+	if has_target or prog < 1.0:
+		var segs := 18
+		var range_col := Color(UiKit.RED, 0.42 if has_target else 0.18)
+		for k in segs:
+			var a0 := TAU * float(k) / float(segs)
+			var a1 := a0 + TAU / float(segs) * 0.55
+			draw_arc(center, range_px, a0, a1, 4, range_col, 1.5, true)
+
+	# Cooldown ring track + active radial sweep.
+	if prog < 0.999:
+		draw_arc(center, ring_px, 0.0, TAU, 32, Color(UiKit.INK, 0.35), 3.0, true)
+		var sweep := -PI * 0.5 + TAU * prog
+		draw_arc(center, ring_px, -PI * 0.5, sweep, 28, Color(UiKit.RED, 0.9), 3.2, true)
+	elif has_target or _bite_flash > 0.0:
+		var k := _bite_flash / 0.28 if _bite_flash > 0.0 else 0.0
+		var r := ring_px + k * 8.0
+		var col := Color(UiKit.AMBER, 0.85 * k) if _bite_flash > 0.0 else Color(UiKit.RED, 0.55 + 0.25 * sin(_time * 8.0))
+		draw_arc(center, r, 0.0, TAU, 32, col, 2.5 + k * 2.0, true)
+
+
+## Floating world-space "[E] Hide" doorway prompt with occupant status pips.
+func _draw_hide_prompt(cam: Camera3D) -> void:
+	var col := get_tree().get_first_node_in_group("colony")
+	if col == null or not col.has_method("hide_candidate"):
+		return
+	var house: House = col.call("hide_candidate") as House
+	if house == null or not is_instance_valid(house):
+		return
+	var door_pos := house.door_position + Vector3(0.0, 1.85, 0.0)
+	if cam.is_position_behind(door_pos):
+		return
+	var p := cam.unproject_position(door_pos)
+	var bob := sin(_time * 4.5) * 3.0
+	p.y += bob
+	var key := UiKit.prompt("hide")
+	var label := "[%s] Hide" % key
+	var fs := UiKit.SIZE_SMALL + 1
+	var tw := _font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	var living := house.living_occupants().size()
+	var healthy := house.healthy_occupants().size()
+	var pip_w := float(living) * 10.0 + (6.0 if living > 0 else 0.0)
+	var box_w := tw + 20.0 + pip_w
+	var box_h := 28.0
+	var rect := Rect2(p - Vector2(box_w * 0.5, box_h), Vector2(box_w, box_h))
+	draw_rect(rect.grow(1.0), Color(UiKit.INK, 0.85))
+	draw_rect(rect, Color(UiKit.PARCHMENT_LIGHT, 0.94))
+	draw_rect(rect, UiKit.AMBER, false, 2.0)
+	var text_pos := Vector2(rect.position.x + 10.0, rect.position.y + box_h * 0.5 + fs * 0.35)
+	draw_string(_font, text_pos, label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, UiKit.INK)
+	# Occupant pips: solid parchment-bordered dots (amber/white = healthy prey, crimson = already infected).
+	var px := text_pos.x + tw + 10.0
+	var py := rect.get_center().y
+	for i in living:
+		var is_healthy := i < healthy
+		var c := UiKit.AMBER if is_healthy else UiKit.RED
+		draw_circle(Vector2(px + i * 10.0, py), 3.6, c)
+		draw_arc(Vector2(px + i * 10.0, py), 3.6, 0.0, TAU, 12, UiKit.INK, 1.0, true)
 
 
 func _draw_bars(cam: Camera3D) -> void:
@@ -210,13 +310,18 @@ func _draw_bars(cam: Camera3D) -> void:
 		var age: float = _bar_age.get(id, 0.0)
 		seen[id] = age + get_process_delta_time()
 		var a := clampf(age / BAR_FADE, 0.0, 1.0)
-		var r := Rect2(p - BAR_SIZE * 0.5, BAR_SIZE)
-		draw_rect(r.grow(1.0), Color(UiKit.PARCHMENT, 0.8 * a))
-		draw_rect(Rect2(r.position, Vector2(r.size.x * clampf(float(v) / 100.0, 0.0, 1.0), r.size.y)), Color(UiKit.RED, a))
-		draw_rect(r.grow(1.0), Color(UiKit.INK, a), false, 1.0)
-		if float(v) >= PULSE_AT:
-			var pulse := 0.5 + 0.5 * sin(_time * 9.0 + float(id % 7))
-			draw_rect(r.grow(2.5 + pulse * 1.5), Color(UiKit.RED, a * (0.25 + 0.5 * pulse)), false, 1.0)
+		var val := float(v)
+		var tier := InfectionComponent.visual_tier(val)
+		var bsize := BAR_SIZE + (Vector2(8.0, 2.0) if tier >= 3 else (Vector2(4.0, 1.0) if tier == 2 else Vector2.ZERO))
+		var r := Rect2(p - bsize * 0.5, bsize)
+		draw_rect(r.grow(1.0), Color(UiKit.PARCHMENT, 0.85 * a))
+		var fill_col := UiKit.RED if tier < 3 else UiKit.RED.lerp(Color(1.0, 0.25, 0.16), 0.5 + 0.5 * sin(_time * 10.0))
+		draw_rect(Rect2(r.position, Vector2(r.size.x * clampf(val / 100.0, 0.0, 1.0), r.size.y)), Color(fill_col, a))
+		draw_rect(r.grow(1.0), Color(UiKit.INK, a), false, 1.2)
+		if val >= PULSE_AT:
+			var pulse := 0.5 + 0.5 * sin(_time * 10.0 + float(id % 7))
+			draw_rect(r.grow(2.5 + pulse * 2.0), Color(UiKit.RED, a * (0.35 + 0.55 * pulse)), false, 1.4)
+			UiIcons.draw(self, "skull", Vector2(r.end.x + 8.0, r.get_center().y), 11.0, Color(UiKit.RED, a))
 	_bar_age = seen
 
 
@@ -229,11 +334,12 @@ func _draw_numbers(cam: Camera3D) -> void:
 		var t: float = num[2] / NUMBER_TIME
 		var p := cam.unproject_position(w) + Vector2(0, -NUMBER_RISE * t)
 		var text: String = num[1]
+		var col: Color = num[3] if num.size() > 3 else UiKit.SEPIA
 		var tw := _font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 		var at := p - Vector2(tw * 0.5, 0)
 		var a := 1.0 - t * t
 		draw_string_outline(_font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 5, Color(UiKit.OUTLINE, UiKit.OUTLINE.a * a))
-		draw_string(_font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(UiKit.SEPIA, a))
+		draw_string(_font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(col, a))
 
 
 func _draw_flights() -> void:

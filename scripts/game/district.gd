@@ -62,6 +62,7 @@
 extends Node3D
 
 const Props := preload("res://scripts/town_props.gd")
+const MedievalAssets := preload("res://scripts/world/medieval_assets.gd")
 const Decor := preload("res://scripts/game/district_decor.gd")
 const FleasScript := preload("res://scripts/game/fleas.gd")
 const GroundScatter := preload("res://scripts/world/ground_scatter.gd")
@@ -72,7 +73,7 @@ const ROUND_DIRECTOR_SCRIPT := "res://scripts/game/round_director.gd"
 const HUD_SCENE := "res://scenes/ui/hud.tscn"
 const WORLD_LAYER := 1
 ## Gamepad Raid: the nearest house within this distance of the Lead Rat.
-const RAID_PAD_RANGE := 10.0
+const RAID_PAD_RANGE := 12.0
 ## Cutaway: squashed height, tween times, how long a house must be clear
 ## before it stands up again, and the check rate.
 const CUT_SCALE := 0.12
@@ -81,23 +82,21 @@ const CUT_UP_TIME := 0.25
 const CUT_RESTORE_DELAY := 0.5
 const CUT_INTERVAL := 0.1
 ## Ground cell size (u) the static scenery is merged in (see _batch_meshes).
-const BATCH_CELL := 12.0
-## Merchant quarter: z of the three east-west streets (their gates sit at
-## both ends), the half width of the central square and its north / south edge.
-const MERCHANT_GATE_Z: Array[float] = [-12.9, 0.0, 14.8]
-const SQUARE_HALF := 8.5
-## Slums street bands (z0, z1) between the house rows, north to south.
-const SLUM_STREETS: Array[Vector2] = [Vector2(-17.35, -11.65), Vector2(-2.75, 2.75), Vector2(11.65, 17.35)]
+const BATCH_CELL := 14.0
+## Expanded 68x68 street bands (north, middle, south avenues — 10-12u wide!).
+const MERCHANT_GATE_Z: Array[float] = [-20.0, 0.0, 20.0]
+const SQUARE_HALF := 12.0
+const SLUM_STREETS: Array[Vector2] = [Vector2(-24.0, -14.0), Vector2(-5.5, 5.5), Vector2(14.0, 24.0)]
 ## Fence post tilt (x the base random tilt) per visual stage: sagging to straight.
 const FENCE_SAG: Array[float] = [3.0, 1.0, 0.35]
 
-## District rectangle on the ground (x -> X, y -> Z).
-@export var bounds := Rect2(-22.0, -22.0, 44.0, 44.0)
-@export var townsfolk_count := 25
+## District rectangle on the ground (x -> X, y -> Z): spacious 68 x 68 u arena.
+@export var bounds := Rect2(-34.0, -34.0, 68.0, 68.0)
+@export var townsfolk_count := 38
 @export var layout_seed := 23
 @export var spawn_seed := 5
 ## Size of the patch each townsperson wanders in, around its spawn point.
-@export var wander_size := 14.0
+@export var wander_size := 20.0
 ## Residents per house: a random count in [0, residents_max], spawned indoors.
 @export var residents_max := 3
 ## Residents per house: the low end of the range (DistrictDef.residents_per_house.x).
@@ -179,6 +178,8 @@ func _ready() -> void:
 	add_child(_collision)
 	var keep: Array[Node] = get_children()
 	_build_district()
+	_colony.setup_nav(bounds, _blockers)
+	_camera.set("bounds", bounds)
 	_decorate()
 	_k.flush(self)
 	_batch_meshes(keep)
@@ -243,35 +244,49 @@ func district_id() -> String:
 
 
 func _setup_light() -> void:
-	# Same sun / fill set-up as the demo square.
-	_sun.rotation_degrees = Vector3(-58.0, -41.0, 0.0)
-	_sun.directional_shadow_max_distance = 60.0
+	# Dramatic gothic key light + subdued cool fill so shadows carve real depth.
+	_sun.rotation_degrees = Vector3(-52.0, -38.0, 0.0)
+	_sun.directional_shadow_max_distance = 110.0
 	var fill := DirectionalLight3D.new()
 	fill.name = "Fill"
-	fill.rotation_degrees = Vector3(-14.0, 79.0, 0.0)
-	fill.light_energy = 0.5
+	fill.rotation_degrees = Vector3(-16.0, 82.0, 0.0)
+	fill.light_color = Color(0.68, 0.74, 0.86)
+	fill.light_energy = 0.28
 	fill.shadow_enabled = false
 	add_child(fill)
 
 
 # ---------------------------------------------------------------------- layout
-## House rows, north (-Z) to south (+Z). `z` is the house centre line, `rot` the
-## base facing (0 = facade towards +Z), `gaps` the x ranges left open (alleys,
-## nooks, the well square), `low_x` an optional x range kept single-storey.
-## Rows 2+3 and 4+5 stand back to back as blocks.
-func _rows() -> Array[Dictionary]:
+## Spacious 68x68 Slums layout: 4 staggered medieval house clusters framing
+## broad 10u avenues, wide 6u alleys, and an open central well courtyard (~18x18u)
+## so massive rat swarms and boss fights have room to breathe.
+func _slum_house_specs() -> Array[Dictionary]:
 	return [
-		{"z": -19.8, "rot": 0.0, "gaps": [Vector2(-5.5, -2.6)]},
-		{"z": -9.2, "rot": 180.0, "gaps": [Vector2(-11.5, -8.4), Vector2(8.6, 11.8)]},
-		{"z": -5.2, "rot": 0.0, "gaps": [Vector2(-11.5, -8.4), Vector2(8.6, 11.8)]},
-		{"z": 5.2, "rot": 180.0, "gaps": [Vector2(-16.5, -13.4), Vector2(-1.6, 7.6), Vector2(14.6, 17.6)]},
-		{"z": 9.2, "rot": 0.0, "gaps": [Vector2(-16.5, -13.4), Vector2(2.0, 5.0), Vector2(14.6, 17.6)],
-			"low_x": Vector2(-3.0, 9.0)},
-		{"z": 19.8, "rot": 180.0, "gaps": [Vector2(5.0, 7.8)]},
+		# North row (facing south into north avenue, z=-28.5)
+		{"pos": Vector3(-25.0, 0, -28.5), "rot": 0.0, "bays": 4, "depth": 2, "stories": 2},
+		{"pos": Vector3(-15.5, 0, -28.2), "rot": 2.0, "bays": 3, "depth": 2, "stories": 2},
+		{"pos": Vector3(-1.5, 0, -28.5), "rot": -2.0, "bays": 4, "depth": 2, "stories": 2},
+		{"pos": Vector3(11.5, 0, -28.3), "rot": 1.5, "bays": 3, "depth": 2, "stories": 2},
+		{"pos": Vector3(23.5, 0, -28.5), "rot": -1.5, "bays": 4, "depth": 2, "stories": 2},
+		# Mid-north clusters (flanking the central well courtyard, wide 6u+ alleys)
+		{"pos": Vector3(-23.5, 0, -10.5), "rot": 0.0, "bays": 4, "depth": 2, "stories": 2},
+		{"pos": Vector3(-13.5, 0, -10.2), "rot": 2.5, "bays": 3, "depth": 2, "stories": 1},
+		{"pos": Vector3(14.5, 0, -10.4), "rot": -2.0, "bays": 3, "depth": 2, "stories": 1},
+		{"pos": Vector3(24.5, 0, -10.5), "rot": 1.0, "bays": 4, "depth": 2, "stories": 2},
+		# Mid-south clusters (low 1-storey south-facing sides so camera sightlines stay open)
+		{"pos": Vector3(-24.0, 0, 10.5), "rot": 180.0, "bays": 4, "depth": 2, "stories": 1},
+		{"pos": Vector3(-13.5, 0, 10.8), "rot": 178.0, "bays": 3, "depth": 2, "stories": 1},
+		{"pos": Vector3(14.0, 0, 10.5), "rot": 182.0, "bays": 3, "depth": 2, "stories": 1},
+		{"pos": Vector3(24.5, 0, 10.6), "rot": 179.0, "bays": 4, "depth": 2, "stories": 1},
+		# South row (facing north into south avenue, z=28.5)
+		{"pos": Vector3(-25.0, 0, 28.5), "rot": 180.0, "bays": 4, "depth": 2, "stories": 1},
+		{"pos": Vector3(-14.5, 0, 28.2), "rot": 182.0, "bays": 3, "depth": 2, "stories": 1},
+		{"pos": Vector3(0.5, 0, 28.5), "rot": 179.0, "bays": 4, "depth": 2, "stories": 1},
+		{"pos": Vector3(13.5, 0, 28.4), "rot": 181.5, "bays": 3, "depth": 2, "stories": 1},
+		{"pos": Vector3(24.5, 0, 28.5), "rot": 178.5, "bays": 4, "depth": 2, "stories": 1},
 	]
 
 
-## Builds the layout of `layout_style` (unknown styles fall back to the slums).
 func _build_district() -> void:
 	match layout_style:
 		"merchant":
@@ -282,120 +297,131 @@ func _build_district() -> void:
 
 func _build_slums() -> void:
 	var k := _k
-	# Mud everywhere, a few cobble patches.
 	var ground := PlaneMesh.new()
-	ground.size = Vector2(160, 160)
-	k.part(self, ground, Props.CREAM, Vector3.ZERO)
+	ground.size = Vector2(220, 220)
+	k.part(self, ground, Color(0.58, 0.52, 0.44), Vector3.ZERO)
 	for r in slum_paving(visual_stage):
-		_cobble_kit.cobbles(self, r.position.x, r.end.x, r.position.y, r.end.y, 0.48, -100.0, 0.0)
+		_cobble_kit.cobbles(self, r.position.x, r.end.x, r.position.y, r.end.y, 0.58, -100.0, 0.0)
 
-	var x_lo := bounds.position.x + 0.2
-	var x_hi := bounds.end.x - 0.2
-	for row in _rows():
-		var gaps: Array = row["gaps"]
-		var start := x_lo
-		for g: Vector2 in gaps:
-			_fill_row(row, start, g.x)
-			start = g.y
-		_fill_row(row, start, x_hi)
+	for spec in _slum_house_specs():
+		_place_megakit_house(spec, "slums")
 
-	# The well square, with its clutter (the well visual is the stage's, see _decorate).
-	_well(Vector3(3.0, 0, 2.4))
-	_barrel(Vector3(-0.9, 0, 6.4))
-	_barrel(Vector3(-0.2, 0, 6.6))
-	_crate(Vector3(6.9, 0, 6.5), Vector3(0.9, 0.6, 0.7), 12.0)
-	_crate(Vector3(6.8, 0, 6.45), Vector3(0.6, 0.45, 0.5), -8.0, 0.6)
-	# Street 1 (north).
-	_barrel(Vector3(-15.0, 0, -16.6))
-	_barrel(Vector3(-14.2, 0, -16.7))
-	_crate(Vector3(4.0, 0, -12.3), Vector3(0.8, 0.6, 0.7), 20.0)
-	_barrel(Vector3(18.5, 0, -16.6))
-	# Street 2 (middle).
-	_barrel(Vector3(-19.0, 0, -2.0))
-	_crate(Vector3(-18.0, 0, -2.0), Vector3(0.8, 0.5, 0.6), -10.0)
-	_barrel(Vector3(13.5, 0, 2.0))
-	_crate(Vector3(12.6, 0, 2.0), Vector3(0.7, 0.5, 0.6), 30.0)
-	# Street 3 (south, the widest).
-	_barrel(Vector3(-3.0, 0, 12.4))
-	_barrel(Vector3(-2.3, 0, 12.9))
-	_crate(Vector3(10.5, 0, 16.6), Vector3(1.0, 0.7, 0.8), 5.0)
-	_crate(Vector3(11.5, 0, 16.7), Vector3(0.7, 0.5, 0.6), -15.0)
-	_barrel(Vector3(17.0, 0, 12.4))
-	# Fences closing the street ends at the District's east and west edges.
-	for x in [bounds.position.x + 0.3, bounds.end.x - 0.3]:
-		_fence(x, -17.35, -11.65)
-		_fence(x, -2.75, 2.75)
-		_fence(x, 11.65, 17.35)
+	# Central well courtyard — generous open space for kiting & swarming
+	_well(Vector3(0.0, 0, 0.0))
+	_wagon(Vector3(-7.0, 0, -5.0), 22.0)
+	_stall_cart(Vector3(7.4, 0, -4.5), -18.0)
+	_bench(Vector3(-4.2, 0, 4.6), 12.0)
+	_bench(Vector3(4.5, 0, 4.4), -10.0)
+	_barrel(Vector3(-7.8, 0, 6.2))
+	_barrel(Vector3(-7.0, 0, 6.7))
+	_crate(Vector3(7.8, 0, 6.0), Vector3(1.0, 0.9, 1.0), 14.0)
+	_rubble(Vector3(-3.0, 0, -7.2))
+	_rubble(Vector3(5.6, 0, 7.2))
+	# North & south avenue dressing (kept tucked near building edges so avenues stay wide)
+	_wagon(Vector3(16.0, 0, -21.5), 86.0)
+	_barrel(Vector3(-19.5, 0, -23.5))
+	_barrel(Vector3(-18.6, 0, -23.6))
+	_crate(Vector3(5.5, 0, -23.8), Vector3(1.0, 0.9, 1.0), 18.0)
+	_barrel(Vector3(-28.0, 0, 2.5))
+	_crate(Vector3(-27.0, 0, 3.0), Vector3(1.0, 0.9, 1.0), -12.0)
+	_barrel(Vector3(27.5, 0, -2.5))
+	_crate(Vector3(26.8, 0, -3.2), Vector3(1.0, 0.9, 1.0), 24.0)
+	_barrel(Vector3(-6.0, 0, 23.0))
+	_crate(Vector3(19.5, 0, 23.2), Vector3(1.0, 0.9, 1.0), -14.0)
+	_stall_cart(Vector3(-17.5, 0, 22.8), 10.0)
+	# Perimeter medieval wooden fences closing the street ends
+	for x in [bounds.position.x + 0.5, bounds.end.x - 0.5]:
+		_fence(x, -24.5, -14.0)
+		_fence(x, -6.0, 6.0)
+		_fence(x, 14.0, 24.5)
 	_add_bounds()
 
 
-## Fills [x0, x1] of a row with houses of random length, separated by narrow
-## slits. A leftover too short for a house becomes a nook with a barrel.
-func _fill_row(row: Dictionary, x0: float, x1: float) -> void:
-	var x := x0
-	while x1 - x >= 3.6:
-		var length := _rng.randf_range(4.6, 6.8)
-		var rest := x1 - x - length
-		if rest < 3.6:
-			length = minf(x1 - x, 7.4)
-		_row_house(row, x + length * 0.5, length)
-		x += length + _rng.randf_range(0.12, 0.45)
-	if x1 - x > 1.2:
-		var facing := 1.0 if row["rot"] == 0.0 else -1.0
-		_barrel(Vector3((x + x1) * 0.5, 0, row["z"] + facing * 1.2))
+## Builds one modular medieval house from MedievalAssets (falling back cleanly to
+## procedural Props.house if glTFs are unavailable).
+func _place_megakit_house(spec: Dictionary, style: String) -> void:
+	var pos: Vector3 = spec["pos"]
+	var rot: float = float(spec["rot"])
+	var bays: int = int(spec["bays"])
+	var depth_bays: int = int(spec["depth"])
+	var stories: int = int(spec["stories"])
+	var length := float(bays) * 2.0
+	var depth := float(depth_bays) * 2.0
+	var info: Dictionary
+	if MedievalAssets.has_asset(&"wall_plaster"):
+		info = MedievalAssets.build_house(self, _k, pos, rot, bays, depth_bays, stories, style, visual_stage, _rng)
+	else:
+		var opts := {"roof": Props.WOOD, "stories": mini(stories, 2), "door_bay": _rng.randi_range(0, bays - 1),
+			"lit": [true, false, true, false], "chimney": true, "braces": true, "pitch": 38.0}
+		var root_fb := _k.house(self, pos, rot, length, depth, 2.9, 2.6, opts)
+		info = {"root": root_fb, "length": length, "depth": depth, "top": 2.9 * stories,
+			"jetty": 0.45 if stories >= 2 else 0.0, "pitch": 38.0, "door_bay": opts["door_bay"],
+			"n_bays": bays, "chimney": Vector3(0, 6.0, 0), "has_chimney": true}
+	var root: Node3D = info["root"]
+	var opts_body := {"pitch": info["pitch"], "door_bay": info["door_bay"], "chimney": info["has_chimney"]}
+	_add_house_body(root, pos, rot, info["length"], info["depth"], info["top"], info["jetty"], opts_body, info["n_bays"])
+	var h: Dictionary = _houses.back()
+	h["roof_root"] = root
+	h["chimney"] = info["chimney"]
+	var ridge_y := float(info["top"]) + 2.4
+	h["ridge"] = [Vector3(-length * 0.4, ridge_y, 0.0), Vector3(length * 0.4, ridge_y, 0.0)]
 
 
-func _row_house(row: Dictionary, cx: float, length: float) -> void:
-	# Rows facing away from the camera (rot 180) stand on the south side of a
-	# street, between it and the camera: keep them low so they hide less of it.
-	# The same goes for the houses behind the well square.
-	var low_x: Vector2 = row.get("low_x", Vector2(INF, -INF))
-	var low: bool = row["rot"] != 0.0 or (cx > low_x.x and cx < low_x.y)
-	var stories := 1 if low or _rng.randf() < 0.35 else 2
-	var depth := _rng.randf_range(3.6, 4.0)
-	var h1 := _rng.randf_range(2.6, 3.0)
-	var h2 := _rng.randf_range(2.3, 2.7)
-	var rot: float = row["rot"] + _rng.randf_range(-4.0, 4.0)
-	# Nudge the house towards its own street a little so the rows look ragged.
-	var facing := 1.0 if row["rot"] == 0.0 else -1.0
-	var pos := Vector3(cx + _rng.randf_range(-0.15, 0.15), 0, row["z"] + facing * _rng.randf_range(-0.1, 0.25))
-	var n_bays := maxi(2, roundi(length / 2.1))
-	var windows := n_bays * (2 if stories == 2 else 1)
-	var lit: Array[bool] = []
-	for i in windows:
-		lit.append(_rng.randf() < 0.35)
-	var opts := {
-		"roof": Props.WOOD if _rng.randf() < 0.3 else Props.WALL,
-		"stories": stories,
-		"door_bay": _rng.randi_range(0, n_bays - 1),
-		"lit": lit,
-		"chimney": _rng.randf() < 0.5,
-		"braces": _rng.randf() < 0.5,
-		"pitch": _rng.randf_range(28.0, 34.0) if low else _rng.randf_range(36.0, 46.0),
-	}
-	# Graphics pass: sagging ridges at the lower stages (own RNG).
-	var sag_roll := _look_rng.randf()
-	if visual_stage == 0 and sag_roll < 0.6:
-		opts["ridge_sag"] = 0.1 + sag_roll * 0.16
-	elif visual_stage == 1 and sag_roll < 0.3:
-		opts["ridge_sag"] = 0.07
-	var root := _k.house(self, pos, rot, length, depth, h1, h2, opts)
-	var roof := Props.house_roof(length, depth, h1, h2, opts)
-	_k.roof_dressing(root, roof, _slum_roof_look(opts["roof"]), _look_rng)
-	# The prop kit batches roof tile joints in world space; give each house
-	# its own batch under its root so the cutaway squashes them too.
-	_k.flush(root)
-	var tiles := root.get_child(root.get_child_count() - 1) as Node3D
-	tiles.transform = root.global_transform.affine_inverse()
-	# Footprint in the house's local frame (facade +Z, ridge along X): the
-	# plinth plus the jettied upper floor, which sticks out j towards +Z.
-	var j := 0.45 if stories == 2 else 0.0
-	var top := h1 + (h2 if stories == 2 else 0.0)
-	_add_house_body(root, pos, rot, length, depth, top, j, opts, n_bays)
-	_note_roof(root, roof)
-	if row["rot"] == 0.0:
-		var wins := _kit_windows(0.0, length, depth, h1, h2, stories, n_bays, opts["door_bay"], lit)
-		_add_facade(root, wins, length, depth, h1, j, n_bays, opts["door_bay"], false)
+func _barrel(pos: Vector3) -> void:
+	if MedievalAssets.has_asset(&"barrel"):
+		var key := &"barrel_apples" if _rng.randf() < 0.25 else &"barrel"
+		MedievalAssets.spawn(self, key, pos, Vector3(0, _rng.randf() * 360.0, 0), Vector3.ONE * 1.15, &"wood")
+	else:
+		_k.barrel(self, pos)
+	_add_cylinder(pos, 0.48, 1.1)
+	_blockers.append({"xf": Transform3D(Basis(), pos), "half": Vector2(0.55, 0.55)})
+
+
+func _crate(pos: Vector3, size: Vector3, rot_y: float, y := 0.0) -> void:
+	if MedievalAssets.has_asset(&"crate"):
+		MedievalAssets.spawn(self, &"crate", pos + Vector3(0, y, 0), Vector3(0, rot_y, 0), Vector3.ONE * 0.9, &"wood")
+	else:
+		_k.crate(self, pos + Vector3(0, y, 0), size, rot_y)
+	if y > 0.0:
+		return
+	_add_box(Transform3D(Basis(Vector3.UP, deg_to_rad(rot_y)), pos), size)
+
+
+func _wagon(pos: Vector3, rot_y: float) -> void:
+	if MedievalAssets.has_asset(&"wagon"):
+		MedievalAssets.spawn(self, &"wagon", pos, Vector3(0, rot_y, 0), Vector3.ONE * 0.95, &"wood")
+		_add_box(Transform3D(Basis(Vector3.UP, deg_to_rad(rot_y)), pos), Vector3(1.9, 1.5, 3.6))
+
+
+func _stall_cart(pos: Vector3, rot_y: float) -> void:
+	if MedievalAssets.has_asset(&"stall_cart"):
+		MedievalAssets.spawn(self, &"stall_cart", pos, Vector3(0, rot_y, 0), Vector3.ONE, &"wood")
+		_add_box(Transform3D(Basis(Vector3.UP, deg_to_rad(rot_y)), pos), Vector3(2.8, 1.4, 1.3))
+
+
+func _bench(pos: Vector3, rot_y: float) -> void:
+	if MedievalAssets.has_asset(&"bench"):
+		MedievalAssets.spawn(self, &"bench", pos, Vector3(0, rot_y, 0), Vector3.ONE * 0.85, &"wood")
+		_add_box(Transform3D(Basis(Vector3.UP, deg_to_rad(rot_y)), pos), Vector3(2.2, 0.6, 0.6))
+
+
+func _rubble(pos: Vector3) -> void:
+	if MedievalAssets.has_asset(&"rubble"):
+		MedievalAssets.spawn(self, &"rubble", pos, Vector3(0, _rng.randf() * 360.0, 0), Vector3.ONE * 1.1, &"stone")
+
+
+## A medieval wooden fence along Z at x, from z0 to z1.
+func _fence(x: float, z0: float, z1: float) -> void:
+	var use_gl := MedievalAssets.has_asset(&"fence_wood")
+	var step := 2.0
+	var z := z0 + step * 0.5
+	while z < z1:
+		if use_gl:
+			MedievalAssets.spawn(self, &"fence_wood", Vector3(x, 0, z), Vector3(0, 90.0, 0), Vector3.ONE, &"wood")
+		else:
+			_k.part(self, _k.box(Vector3(0.16, 1.2, step)), Props.WOOD, Vector3(x, 0.6, z))
+		_perch_lines.append([Vector3(x, 0.9, z), Vector3(x, 0.9, z)])
+		z += step
 
 
 ## The House body of a built house visual: collider, door, cutaway occluders
@@ -412,12 +438,9 @@ func _add_house_body(root: Node3D, pos: Vector3, rot: float, length: float, dept
 	add_child(body)
 	var size := Vector3(length + 0.2, top, depth + 0.12 + j)
 	_add_box(Transform3D(basis, centre), size, body)
-	# The collider's front face is at j / 2 + size.z / 2 in the house frame.
 	body.setup(root, length, depth, top, j, opts["pitch"], opts["door_bay"], n_bays,
 		j * 0.5 + size.z * 0.5, _k)
 	_house_by_body[body] = root
-	# Occluders: the walls (same as the collider, so the rat is never inside),
-	# and the roof with its eaves, which starts above any rat.
 	var rise := (depth + j + 0.7) * 0.5 * tan(deg_to_rad(opts["pitch"]))
 	var roof_h := rise + (0.6 if opts["chimney"] else 0.0)
 	_houses.append({
@@ -437,61 +460,26 @@ func _add_house_body(root: Node3D, pos: Vector3, rot: float, length: float, dept
 	})
 
 
-## The well's collider and blocker; its visual depends on the stage (_decorate).
 func _well(pos: Vector3) -> void:
 	_well_pos = pos
 	_add_cylinder(pos, 2.0, 1.4)
 	_blockers.append({"xf": Transform3D(Basis(), pos), "half": Vector2(2.3, 2.3)})
 
 
-func _barrel(pos: Vector3) -> void:
-	_k.barrel(self, pos)
-	_add_cylinder(pos, 0.48, 1.2)
-	_blockers.append({"xf": Transform3D(Basis(), pos), "half": Vector2(0.5, 0.5)})
-
-
-func _crate(pos: Vector3, size: Vector3, rot_y: float, y := 0.0) -> void:
-	_k.crate(self, pos + Vector3(0, y, 0), size, rot_y)
-	if y > 0.0:
-		return  # stacked on another crate, which already blocks
-	_add_box(Transform3D(Basis(Vector3.UP, deg_to_rad(rot_y)), pos), size)
-
-
-## A rickety plank fence along Z at x, from z0 to z1.
-func _fence(x: float, z0: float, z1: float) -> void:
-	var n := maxi(2, int((z1 - z0) / 1.1) + 1)
-	for i in n:
-		var z := lerpf(z0, z1, float(i) / (n - 1))
-		if i % 2 == 1:
-			_perch_lines.append([Vector3(x, 1.3, z), Vector3(x, 1.3, z)])
-		var sag := FENCE_SAG[visual_stage]
-		_k.part(self, _k.box(Vector3(0.16, 1.3, 0.16)), Props.WOOD, Vector3(x, 0.65, z),
-			Vector3(_rng.randf_range(-4, 4) * sag, 0, _rng.randf_range(-4, 4) * sag))
-	# Stage 0: the rails sag towards one end.
-	var droop := 7.0 if visual_stage == 0 else 0.0
-	for y: float in [0.45, 1.0]:
-		_k.part(self, _k.box(Vector3(0.08, 0.14, z1 - z0 + 0.2)), Props.WOOD, Vector3(x + 0.1, y, (z0 + z1) * 0.5),
-			Vector3(droop * (1.0 if y > 0.5 else -0.6), 0, 0))
-
-
 # ---------------------------------------------------------------------- year stages
-## Slums paving rects (x -> X, y -> Z) for a visual stage: a few patches,
-## then the middle street and the well square, then nearly every street.
+## Slums paving rects (x -> X, y -> Z) for a visual stage on the 68x68 map.
 static func slum_paving(stage: int) -> Array[Rect2]:
 	var out: Array[Rect2] = []
 	match stage:
 		0:
-			out = [Rect2(-1.6, -2.7, 9.2, 9.7), Rect2(8.0, -17.2, 7.5, 5.4), Rect2(-13.0, 11.8, 7.0, 5.4)]
+			out = [Rect2(-9.0, -7.0, 18.0, 14.0), Rect2(10.0, -22.0, 14.0, 6.0), Rect2(-22.0, 16.0, 14.0, 6.0)]
 		1:
-			out = [Rect2(-22.0, -2.75, 44.0, 5.5), Rect2(-1.6, 2.75, 9.2, 4.25),
-				Rect2(2.0, -17.2, 16.0, 5.4), Rect2(-17.0, 11.8, 13.0, 5.4)]
+			out = [Rect2(-34.0, -5.5, 68.0, 11.0), Rect2(-9.0, -10.0, 18.0, 20.0),
+				Rect2(-12.0, -22.0, 32.0, 7.0), Rect2(-22.0, 15.0, 32.0, 7.0)]
 		_:
 			for band in SLUM_STREETS:
-				out.append(Rect2(-22.0, band.x, 44.0, band.y - band.x))
-			out.append_array([Rect2(-1.6, 2.75, 9.2, 4.25), Rect2(2.0, 7.0, 3.0, 4.65),
-				Rect2(-11.5, -11.65, 3.1, 8.9), Rect2(8.6, -11.65, 3.2, 8.9),
-				Rect2(-16.5, 2.75, 3.1, 8.9), Rect2(14.6, 2.75, 3.0, 8.9),
-				Rect2(-5.5, -22.0, 2.9, 4.65), Rect2(5.0, 17.35, 2.8, 4.65)])
+				out.append(Rect2(-34.0, band.x, 68.0, band.y - band.x))
+			out.append(Rect2(-10.0, -14.0, 20.0, 28.0))
 	return out
 
 
@@ -734,80 +722,74 @@ func _laundry_lines() -> Array:
 ## centre line, `rot` facing, `depth`, `gaps` x ranges left open (the square,
 ## the gate alleys). `tall` rows hide no street from the camera, so 3 storeys
 ## may stand there; the others keep to 2.
-func _merchant_rows() -> Array[Dictionary]:
-	var sq := Vector2(-SQUARE_HALF, SQUARE_HALF)
+## Spacious 68x68 Merchant quarter: grand central market plaza (~24x22u),
+## broad 11u cobbled avenues, MegaKit brick/plaster 2-3 storey houses, stalls & lamps.
+func _merchant_house_specs() -> Array[Dictionary]:
 	return [
-		{"z": -19.8, "rot": 0.0, "depth": 4.0, "gaps": [Vector2(-2.2, 2.2)], "tall": true},
-		{"z": -6.2, "rot": 0.0, "depth": 4.6, "gaps": [sq], "tall": false},
-		{"z": 5.6, "rot": 180.0, "depth": 4.0, "gaps": [sq], "tall": false},
-		{"z": 9.4, "rot": 0.0, "depth": 3.6, "gaps": [sq], "tall": true},
-		{"z": 20.1, "rot": 180.0, "depth": 3.4, "gaps": [Vector2(-2.2, 2.2)], "tall": false},
+		# North avenue facade (tall 2-3 storey merchant townhouses)
+		{"pos": Vector3(-24.5, 0, -28.5), "rot": 0.0, "bays": 4, "depth": 2, "stories": 3},
+		{"pos": Vector3(-13.5, 0, -28.5), "rot": 0.0, "bays": 4, "depth": 2, "stories": 2},
+		{"pos": Vector3(13.5, 0, -28.5), "rot": 0.0, "bays": 4, "depth": 2, "stories": 2},
+		{"pos": Vector3(24.5, 0, -28.5), "rot": 0.0, "bays": 4, "depth": 2, "stories": 3},
+		# Mid-north blocks framing the grand central market square
+		{"pos": Vector3(-23.5, 0, -10.5), "rot": 0.0, "bays": 4, "depth": 3, "stories": 2},
+		{"pos": Vector3(23.5, 0, -10.5), "rot": 0.0, "bays": 4, "depth": 3, "stories": 2},
+		# Mid-south blocks framing the square
+		{"pos": Vector3(-23.5, 0, 10.5), "rot": 180.0, "bays": 4, "depth": 2, "stories": 2},
+		{"pos": Vector3(23.5, 0, 10.5), "rot": 180.0, "bays": 4, "depth": 2, "stories": 2},
+		# South avenue townhouses
+		{"pos": Vector3(-24.5, 0, 28.5), "rot": 180.0, "bays": 4, "depth": 2, "stories": 2},
+		{"pos": Vector3(-13.5, 0, 28.5), "rot": 180.0, "bays": 4, "depth": 2, "stories": 2},
+		{"pos": Vector3(13.5, 0, 28.5), "rot": 180.0, "bays": 4, "depth": 2, "stories": 2},
+		{"pos": Vector3(24.5, 0, 28.5), "rot": 180.0, "bays": 4, "depth": 2, "stories": 2},
 	]
 
 
-## The Merchant quarter (~24 houses): three wide cobbled streets east-west
-## (north street, the middle road through the square, south street) and a
-## central market square with the well, stalls and lamp posts. Taller, richer
-## houses: lime-washed walls, stone quoins, steep slate / pale roofs (never
-## red), more lit windows and wall lanterns.
 func _build_merchant() -> void:
 	var k := _k
 	var ground := PlaneMesh.new()
-	ground.size = Vector2(160, 160)
-	k.part(self, ground, Props.CREAM, Vector3.ZERO)
+	ground.size = Vector2(220, 220)
+	k.part(self, ground, Color(0.56, 0.52, 0.46), Vector3.ZERO)
 	var x0 := bounds.position.x
 	var x1 := bounds.end.x
-	var sq := SQUARE_HALF + 0.1
-	k.cobbles(self, x0, x1, -17.6, -8.4, 0.62, -100.0, 0.0)
-	k.cobbles(self, x0, x1, -3.7, 3.4, 0.62, -100.0, 0.0)
-	k.cobbles(self, x0, x1, 11.4, 18.2, 0.62, -100.0, 0.0)
-	k.cobbles(self, -sq, sq, -8.4, -3.7, 0.62, -100.0, 0.0)
-	k.cobbles(self, -sq, sq, 3.4, 11.4, 0.62, -100.0, 0.0)
-	k.cobbles(self, -2.3, 2.3, bounds.position.y, -17.6, 0.62, -100.0, 0.0)
-	k.cobbles(self, -2.3, 2.3, 18.2, bounds.end.y, 0.62, -100.0, 0.0)
+	var sq := SQUARE_HALF + 0.5
+	k.cobbles(self, x0, x1, -24.5, -14.5, 0.68, -100.0, 0.0)
+	k.cobbles(self, x0, x1, -5.5, 5.5, 0.68, -100.0, 0.0)
+	k.cobbles(self, x0, x1, 14.5, 24.5, 0.68, -100.0, 0.0)
+	k.cobbles(self, -sq, sq, -14.5, 14.5, 0.68, -100.0, 0.0)
+	k.cobbles(self, -4.5, 4.5, bounds.position.y, -24.5, 0.68, -100.0, 0.0)
+	k.cobbles(self, -4.5, 4.5, 24.5, bounds.end.y, 0.68, -100.0, 0.0)
 
-	var x_lo := x0 + 0.2
-	var x_hi := x1 - 0.2
-	for row in _merchant_rows():
-		var start := x_lo
-		for g: Vector2 in row["gaps"]:
-			_merchant_fill(row, start, g.x)
-			start = g.y
-		_merchant_fill(row, start, x_hi)
+	for spec in _merchant_house_specs():
+		_place_megakit_house(spec, "merchant")
 
-	# The market square: the well in the middle, two stalls on each side.
-	_well(Vector3(0.0, 0, 0.4))
-	_stall(Vector3(-4.6, 0, -7.4), 0.0, Props.COAT)
-	_stall(Vector3(4.4, 0, -7.4), 0.0, Props.WOOD)
-	_stall(Vector3(-4.4, 0, 7.4), 0.0, Props.WOOD)
-	_stall(Vector3(4.6, 0, 7.4), 0.0, Props.COAT)
-	_barrel(Vector3(-7.4, 0, -6.6))
-	_barrel(Vector3(-7.3, 0, -5.7))
-	_crate(Vector3(7.4, 0, -6.4), Vector3(0.9, 0.6, 0.7), 10.0)
-	_crate(Vector3(7.35, 0, -6.4), Vector3(0.6, 0.45, 0.5), -6.0, 0.6)
-	_crate(Vector3(-7.3, 0, 8.4), Vector3(0.8, 0.6, 0.7), -12.0)
-	_barrel(Vector3(7.4, 0, 8.6))
-	_sacks(Vector3(-1.6, 0, 8.2))
-	_sacks(Vector3(1.4, 0, -6.6))
-	# Lamp posts round the square and along the streets.
-	for p: Vector3 in [Vector3(-7.9, 0, -8.0), Vector3(7.9, 0, -8.0), Vector3(-7.9, 0, 11.0),
-			Vector3(7.9, 0, 11.0), Vector3(-15.0, 0, -9.0), Vector3(15.0, 0, -9.0),
-			Vector3(-15.0, 0, 2.7), Vector3(15.0, 0, 2.7), Vector3(-12.0, 0, 17.4),
-			Vector3(12.0, 0, 17.4), Vector3(-2.9, 0, -17.0), Vector3(2.9, 0, -17.0)]:
+	# Grand central market plaza: well + stalls + carts + wagons + glowing lamps
+	_well(Vector3(0.0, 0, 0.0))
+	_stall(Vector3(-7.0, 0, -9.5), 0.0, Props.COAT)
+	_stall(Vector3(7.0, 0, -9.5), 0.0, Props.WOOD)
+	_stall(Vector3(-7.0, 0, 9.5), 180.0, Props.WOOD)
+	_stall(Vector3(7.0, 0, 9.5), 180.0, Props.COAT)
+	_wagon(Vector3(-10.5, 0, 0.0), 8.0)
+	_stall_cart(Vector3(10.2, 0, 0.0), -12.0)
+	_barrel(Vector3(-11.0, 0, -8.5))
+	_barrel(Vector3(-10.2, 0, -8.0))
+	_crate(Vector3(10.8, 0, -8.2), Vector3(1.0, 0.9, 1.0), 10.0)
+	_crate(Vector3(-10.6, 0, 8.8), Vector3(1.0, 0.9, 1.0), -12.0)
+	_barrel(Vector3(10.8, 0, 8.8))
+	_sacks(Vector3(-2.4, 0, 9.5))
+	_sacks(Vector3(2.4, 0, -9.2))
+	for p: Vector3 in [Vector3(-11.0, 0, -11.5), Vector3(11.0, 0, -11.5), Vector3(-11.0, 0, 11.5),
+			Vector3(11.0, 0, 11.5), Vector3(-22.0, 0, -15.5), Vector3(22.0, 0, -15.5),
+			Vector3(-22.0, 0, 4.5), Vector3(22.0, 0, 4.5), Vector3(-18.0, 0, 23.0),
+			Vector3(18.0, 0, 23.0), Vector3(-5.0, 0, -24.5), Vector3(5.0, 0, -24.5)]:
 		_lamp(p)
-	# Street clutter.
-	_barrel(Vector3(-19.2, 0, -9.2))
-	_crate(Vector3(18.6, 0, -9.3), Vector3(0.8, 0.6, 0.7), 15.0)
-	_barrel(Vector3(-11.0, 0, 17.4))
-	_crate(Vector3(17.5, 0, 17.4), Vector3(0.9, 0.6, 0.7), -8.0)
-	_barrel(Vector3(19.5, 0, 2.6))
-	# Low stone walls closing the street ends and the alleys at the bounds.
-	for x in [x0 + 0.45, x1 - 0.45]:
-		_stone_wall(Vector3(x, 0, -12.9), 9.6, 90.0)
-		_stone_wall(Vector3(x, 0, -0.15), 7.4, 90.0)
-		_stone_wall(Vector3(x, 0, 14.8), 7.2, 90.0)
-	_stone_wall(Vector3(0, 0, bounds.position.y + 0.45), 4.8, 0.0)
-	_stone_wall(Vector3(0, 0, bounds.end.y - 0.45), 4.8, 0.0)
+	# Perimeter low stone walls closing street ends
+	for x in [x0 + 0.5, x1 - 0.5]:
+		_stone_wall(Vector3(x, 0, -19.5), 11.0, 90.0)
+		_stone_wall(Vector3(x, 0, 0.0), 11.0, 90.0)
+		_stone_wall(Vector3(x, 0, 19.5), 11.0, 90.0)
+	_stone_wall(Vector3(0, 0, bounds.position.y + 0.5), 9.0, 0.0)
+	_stone_wall(Vector3(0, 0, bounds.end.y - 0.5), 9.0, 0.0)
 	_add_bounds()
 
 
@@ -939,43 +921,26 @@ func _shop_storey(root: Node3D, length: float, depth: float, h: float, n_bays: i
 
 ## A market stall like Props.market_stall(), but its awning stripes are
 ## `stripe` and cream (red stays the plague's colour). Collision on its counter.
-func _stall(pos: Vector3, rot_y: float, stripe: Color) -> void:
+func _stall(pos: Vector3, rot_y: float, _stripe: Color) -> void:
+	if MedievalAssets.has_asset(&"stall"):
+		MedievalAssets.spawn(self, &"stall", pos, Vector3(0, rot_y, 0), Vector3.ONE * 1.45, &"wood")
+		var basis := Basis(Vector3.UP, deg_to_rad(rot_y))
+		_add_box(Transform3D(basis, pos), Vector3(2.8, 1.5, 1.5))
+		return
 	var k := _k
 	var root := k.node(self, pos, rot_y)
-	var w := 3.4
-	k.part(root, k.box(Vector3(w, 1.0, 1.3)), Props.WOOD, Vector3(0, 0.5, 0.5))
-	k.part(root, k.box(Vector3(w + 0.1, 0.1, 1.45)), Props.WOOD, Vector3(0, 1.03, 0.5))
-	for i in 4:
-		k.part(root, k.box(Vector3(w, 0.06, 0.05)), Props.TIMBER, Vector3(0, 0.25 + i * 0.22, 1.16))
-	for sx: float in [-1.0, 1.0]:
-		k.part(root, k.box(Vector3(0.14, 2.7, 0.14)), Props.WOOD, Vector3(sx * w * 0.5, 1.35, 1.1))
-		k.part(root, k.box(Vector3(0.14, 3.3, 0.14)), Props.WOOD, Vector3(sx * w * 0.5, 1.65, -0.5))
-	k.crate(root, Vector3(-1.0, 1.08, 0.45), Vector3(0.7, 0.4, 0.55), 8)
-	k.crate(root, Vector3(0.1, 1.08, 0.5), Vector3(0.6, 0.5, 0.5), -6)
-	k.part(root, k.sphere(0.25, 8), Props.CLOTH, Vector3(1.0, 1.3, 0.45), Vector3.ZERO, Vector3(1, 0.8, 1))
-	k.part(root, k.sphere(0.2, 8), Props.CLOTH, Vector3(1.3, 1.25, 0.6), Vector3.ZERO, Vector3(1, 0.8, 1))
-	var y_back := 3.3
-	var y_front := 2.6
-	var z_back := -0.6
-	var z_front := 1.9
-	var slope := sqrt(pow(z_front - z_back, 2.0) + pow(y_back - y_front, 2.0))
-	var ang := rad_to_deg(atan2(y_back - y_front, z_front - z_back))
-	var n_str := 8
-	var sw := (w + 0.4) / n_str
-	for i in n_str:
-		var x := -(w + 0.4) * 0.5 + (i + 0.5) * sw
-		var col := stripe if i % 2 == 0 else Props.CREAM
-		k.part(root, k.box(Vector3(sw, 0.08, slope)), col,
-			Vector3(x, (y_back + y_front) * 0.5 + (0.0 if i % 2 == 0 else 0.03), (z_back + z_front) * 0.5), Vector3(ang, 0, 0))
-		k.part(root, k.cyl(sw * 0.5, sw * 0.5, 0.06, 10), col, Vector3(x, y_front - 0.22, z_front + 0.03), Vector3(90, 0, 0))
-		k.part(root, k.box(Vector3(sw, 0.22, 0.06)), col, Vector3(x, y_front - 0.11, z_front + 0.03))
-	k.part(root, k.box(Vector3(w + 0.5, 0.08, 0.1)), Props.TIMBER, Vector3(0, y_front + 0.02, z_front + 0.05))
-	var basis := Basis(Vector3.UP, deg_to_rad(rot_y))
-	_add_box(Transform3D(basis, pos + basis * Vector3(0, 0, 0.3)), Vector3(w + 0.3, 1.2, 1.9))
+	k.part(root, k.box(Vector3(3.0, 1.0, 1.3)), Props.WOOD, Vector3(0, 0.5, 0.0))
+	var basis2 := Basis(Vector3.UP, deg_to_rad(rot_y))
+	_add_box(Transform3D(basis2, pos), Vector3(3.2, 1.2, 1.6))
 
 
-## A heap of grain sacks (no collision: the townsfolk wade past).
+## A heap of grain sacks (no collision: townsfolk wade past).
 func _sacks(pos: Vector3) -> void:
+	if MedievalAssets.has_asset(&"bag"):
+		for i in 3:
+			var p := pos + Vector3(_rng.randf_range(-0.5, 0.5), 0.0, _rng.randf_range(-0.4, 0.4))
+			MedievalAssets.spawn(self, &"bag", p, Vector3(0, _rng.randf() * 360.0, 0), Vector3.ONE * 0.9, &"wood")
+		return
 	for i in 3:
 		var p := pos + Vector3(_rng.randf_range(-0.4, 0.4), 0.0, _rng.randf_range(-0.3, 0.3))
 		_k.part(self, _k.sphere(0.32, 8), Props.CLOTH, p + Vector3(0, 0.26, 0), Vector3(0, _rng.randf() * 90.0, 0), Vector3(1.0, 0.8, 0.8))
@@ -1283,14 +1248,12 @@ func _setup_spawner() -> void:
 ## come in: the Spawner's markers for the slums, the street ends for the
 ## merchant quarter.
 func gate_points() -> Array[Vector3]:
-	if layout_style != "merchant":
-		return _spawner.marker_gates()
 	var out: Array[Vector3] = []
 	for z: float in MERCHANT_GATE_Z:
-		out.append(Vector3(bounds.position.x + 1.4, 0, z))
-		out.append(Vector3(bounds.end.x - 1.4, 0, z))
-	out.append(Vector3(0, 0, bounds.position.y + 1.3))
-	out.append(Vector3(0, 0, bounds.end.y - 1.3))
+		out.append(Vector3(bounds.position.x + 1.8, 0, z))
+		out.append(Vector3(bounds.end.x - 1.8, 0, z))
+	out.append(Vector3(0, 0, bounds.position.y + 1.8))
+	out.append(Vector3(0, 0, bounds.end.y - 1.8))
 	return out
 
 
@@ -1334,7 +1297,7 @@ func _debug_tick(delta: float) -> void:
 				Engine.get_frames_per_second(),
 				1000.0 / maxf(1.0, Engine.get_frames_per_second()),
 				_perf_acc.z / frames, _perf_acc.x / frames, _perf_max_ph,
-				get_tree().get_nodes_in_group("rats").size(),
+				_colony.adult_count + _colony.pup_count,
 				get_tree().get_nodes_in_group("townsfolk").size(),
 				get_tree().get_nodes_in_group("indoors").size(),
 				get_tree().get_nodes_in_group("corpses").size(),
@@ -1355,12 +1318,16 @@ func _debug_tick(delta: float) -> void:
 ## Debug flags parsed afterwards (--start-colony, --pups, --god) win.
 func _apply_run_stats() -> void:
 	_rat.set("max_speed", Run.stat("rat_speed"))
-	_colony.feed_time = Run.stat("feed_time")
-	_colony.pup_maturity = Run.stat("pup_maturity")
+	_colony.feed_time = maxf(0.25, Run.stat("feed_time"))
+	_colony.pup_maturity = maxf(2.0, Run.stat("pup_maturity"))
+	_colony.extra_pups_per_feed = maxi(0, int(round(Run.stat("extra_pups_per_feed"))))
 	# Followers spawn deferred, so this lands before the Colony's start spawn.
 	_colony.start_adults = Run.start_colony_size()
-	_colony.set_bite_stats(Run.stat("bite_range"), Run.stat("bite_cooldown"),
+	_colony.set_bite_stats(Run.stat("bite_range"), maxf(0.3, Run.stat("bite_cooldown")),
 		Run.stat("bite_chunk"), Run.stat("bite_rate_bonus"))
+	var lb := _rat.get_node_or_null("BiteComponent") as BiteComponent
+	if lb != null:
+		lb.cleave_targets = maxi(1, int(round(Run.stat("lead_cleave"))))
 	_lethality = Run.stat("lethality")
 	_colony.hide_unlocked = Run.is_unlocked("unlock_hide")
 	_colony.raid_unlocked = Run.is_unlocked("unlock_raid")
@@ -1411,8 +1378,12 @@ func _print_run_stats() -> void:
 		_colony.raid_size, _colony.raid_duration, _colony.raid_cooldown])
 
 
-# ---------------------------------------------------------------------- raid
+# ---------------------------------------------------------------------- raid & deliberate hide
 func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed("hide") and not event.is_echo() and _colony.hide_unlocked:
+		if _colony.try_hide():
+			get_viewport().set_input_as_handled()
+			return
 	if not event.is_action_pressed("raid") or not _colony.raid_unlocked:
 		return
 	var h: House = null

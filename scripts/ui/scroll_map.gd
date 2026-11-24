@@ -41,8 +41,8 @@ const SEPIA := UiKit.SEPIA
 ## The table under the scroll and the rollers' handles (map-only art colours).
 const TABLE := Color(0.17, 0.11, 0.07)
 const WOOD := Color(0.33, 0.21, 0.11)
-## District ground half-size (District.bounds is 44 x 44 u around the origin).
-const DISTRICT_HALF := 22.0
+## District ground half-size (District.bounds is 68 x 68 u around the origin).
+const DISTRICT_HALF := 34.0
 ## Extra ground units round the bounds inside a quarter's wall.
 const REGION_MARGIN := 1.5
 const ROLLER_H := 38.0
